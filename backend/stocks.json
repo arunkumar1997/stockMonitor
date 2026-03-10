@@ -1,0 +1,229 @@
+[
+  {
+    "symbol": "SUNPHARMA.NS",
+    "name": "Sun Pharmaceutical",
+    "sector": "Pharma",
+    "is_deleted": true
+  },
+  {
+    "symbol": "DRREDDY.NS",
+    "name": "Dr. Reddy's Laboratories",
+    "sector": "Pharma"
+  },
+  {
+    "symbol": "CIPLA.NS",
+    "name": "Cipla",
+    "sector": "Pharma"
+  },
+  {
+    "symbol": "DIVISLAB.NS",
+    "name": "Divi's Laboratories",
+    "sector": "Pharma"
+  },
+  {
+    "symbol": "AUROPHARMA.NS",
+    "name": "Aurobindo Pharma",
+    "sector": "Pharma"
+  },
+  {
+    "symbol": "LUPIN.NS",
+    "name": "Lupin",
+    "sector": "Pharma"
+  },
+  {
+    "symbol": "GLENMARK.NS",
+    "name": "Glenmark Pharmaceuticals",
+    "sector": "Pharma"
+  },
+  {
+    "symbol": "ALKEM.NS",
+    "name": "Alkem Laboratories",
+    "sector": "Pharma"
+  },
+  {
+    "symbol": "TORNTPHARM.NS",
+    "name": "Torrent Pharmaceuticals",
+    "sector": "Pharma"
+  },
+  {
+    "symbol": "BIOCON.NS",
+    "name": "Biocon",
+    "sector": "Pharma"
+  },
+  {
+    "symbol": "HAL.NS",
+    "name": "Hindustan Aeronautics",
+    "sector": "Defence"
+  },
+  {
+    "symbol": "BEL.NS",
+    "name": "Bharat Electronics",
+    "sector": "Defence"
+  },
+  {
+    "symbol": "BDL.NS",
+    "name": "Bharat Dynamics",
+    "sector": "Defence"
+  },
+  {
+    "symbol": "MAZDOCK.NS",
+    "name": "Mazagon Dock Shipbuilders",
+    "sector": "Defence"
+  },
+  {
+    "symbol": "COCHINSHIP.NS",
+    "name": "Cochin Shipyard",
+    "sector": "Defence"
+  },
+  {
+    "symbol": "GRSE.NS",
+    "name": "Garden Reach Shipbuilders",
+    "sector": "Defence"
+  },
+  {
+    "symbol": "DATAPATTNS.NS",
+    "name": "Data Patterns India",
+    "sector": "Defence"
+  },
+  {
+    "symbol": "ZENTEC.NS",
+    "name": "Zen Technologies",
+    "sector": "Defence"
+  },
+  {
+    "symbol": "ASTRAMICRO.NS",
+    "name": "Astra Microwave Products",
+    "sector": "Defence"
+  },
+  {
+    "symbol": "DCXINDIA.NS",
+    "name": "DCX Systems",
+    "sector": "Defence"
+  },
+  {
+    "symbol": "PARAS.NS",
+    "name": "Paras Defence & Space",
+    "sector": "Defence"
+  },
+  {
+    "symbol": "DIXON.NS",
+    "name": "Dixon Technologies",
+    "sector": "Electronics"
+  },
+  {
+    "symbol": "KAYNES.NS",
+    "name": "Kaynes Technology India",
+    "sector": "Electronics"
+  },
+  {
+    "symbol": "AMBER.NS",
+    "name": "Amber Enterprises India",
+    "sector": "Electronics"
+  },
+  {
+    "symbol": "PGEL.NS",
+    "name": "PG Electroplast",
+    "sector": "Electronics"
+  },
+  {
+    "symbol": "SYRMA.NS",
+    "name": "Syrma SGS Technology",
+    "sector": "Electronics"
+  },
+  {
+    "symbol": "ELIN.NS",
+    "name": "Elin Electronics",
+    "sector": "Electronics"
+  },
+  {
+    "symbol": "AVALON.NS",
+    "name": "Avalon Technologies",
+    "sector": "Electronics"
+  },
+  {
+    "symbol": "TEJASNET.NS",
+    "name": "Tejas Networks",
+    "sector": "Electronics"
+  },
+  {
+    "symbol": "NTPC.NS",
+    "name": "NTPC",
+    "sector": "Infra / Power"
+  },
+  {
+    "symbol": "POWERGRID.NS",
+    "name": "Power Grid Corporation",
+    "sector": "Infra / Power"
+  },
+  {
+    "symbol": "TATAPOWER.NS",
+    "name": "Tata Power",
+    "sector": "Infra / Power"
+  },
+  {
+    "symbol": "ABB.NS",
+    "name": "ABB India",
+    "sector": "Infra / Power"
+  },
+  {
+    "symbol": "SIEMENS.NS",
+    "name": "Siemens India",
+    "sector": "Infra / Power"
+  },
+  {
+    "symbol": "CGPOWER.NS",
+    "name": "CG Power & Industrial Solutions",
+    "sector": "Infra / Power"
+  },
+  {
+    "symbol": "MOTHERSON.NS",
+    "name": "Samvardhana Motherson",
+    "sector": "Autos"
+  },
+  {
+    "symbol": "INFY.NS",
+    "name": "Infosys",
+    "sector": "IT"
+  },
+  {
+    "symbol": "ROUTE.NS",
+    "name": "Route Mobile",
+    "sector": "IT"
+  },
+  {
+    "symbol": "HDFCBANK.NS",
+    "name": "HDFC Bank",
+    "sector": "Banks"
+  },
+  {
+    "symbol": "ICICIBANK.NS",
+    "name": "ICICI Bank",
+    "sector": "Banks"
+  },
+  {
+    "symbol": "NATCOPHARM.NS",
+    "name": "Natco Pharma",
+    "sector": "Penny Pharma"
+  },
+  {
+    "symbol": "FDC.NS",
+    "name": "FDC",
+    "sector": "Penny Pharma"
+  },
+  {
+    "symbol": "NEULANDLAB.NS",
+    "name": "Neuland Laboratories",
+    "sector": "Penny Pharma",
+    "is_deleted": true
+  },
+  {
+    "symbol": "GOLDBEES.NS",
+    "name": "Nippon India ETF Gold BeES",
+    "sector": "ETF"
+  },
+  {
+    "symbol": "SILVERBEES.NS",
+    "name": "Nippon India ETF Silver BeES",
+    "sector": "ETF"
+  }
+]
