@@ -7,37 +7,55 @@ Jobs:
   refresh_all  — every 15 min, iterates stocks one-by-one
   refresh_one  — on-demand (called when a new stock is added)
 """
-import json
-import os
 import random
 import time
 import threading
+from collections import deque
+from datetime import datetime
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.interval import IntervalTrigger
 
-from data.fetcher import get_history, get_info
+from data.fetcher import get_history, get_info, get_fundamentals
 from data.analysis import full_analysis
 from data.news import get_news
 from data import store
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-STOCKS_FILE = os.path.join(BASE_DIR, "stocks.json")
-
 REFRESH_INTERVAL_MINUTES = 15
 INTER_STOCK_DELAY = (1.5, 3.5)   # random sleep (seconds) between each stock
 
-# Tracks the symbol currently being refreshed (for status endpoint)
+# ── In-memory log buffer ──────────────────────────────────────────────────────
+_log_buffer: deque = deque(maxlen=500)   # last 500 entries
+_log_lock = threading.Lock()
+_log_seq = 0   # monotonic counter
+
+
+def _log(level: str, message: str, symbol: str = ""):
+    """Append a structured log entry to the in-memory buffer."""
+    global _log_seq
+    with _log_lock:
+        _log_seq += 1
+        _log_buffer.append({
+            "id":      _log_seq,
+            "ts":      datetime.now().isoformat(timespec="seconds"),
+            "level":   level,       # INFO | SUCCESS | ERROR | WARN
+            "symbol":  symbol,
+            "message": message,
+        })
+    tag = {"INFO": "ℹ", "SUCCESS": "✓", "ERROR": "✗", "WARN": "⚠"}.get(level, "·")
+    sym = f" [{symbol}]" if symbol else ""
+    print(f"[scheduler]{sym} {tag} {message}")
+
+
+def get_logs(limit: int = 200):
+    """Return the most recent `limit` log entries (newest first)."""
+    with _log_lock:
+        entries = list(_log_buffer)
+    return list(reversed(entries))[:limit]
+
+
+# ── Symbol currently being refreshed ─────────────────────────────────────────
 _current_symbol: str = ""
-_lock = threading.Lock()
-
-
-def _load_stocks() -> list:
-    try:
-        with open(STOCKS_FILE) as f:
-            return json.load(f)
-    except Exception:
-        return []
+_refresh_lock = threading.Lock()
 
 
 def refresh_one(symbol: str, name: str, sector: str, *, skip_if_fresh: bool = False):
@@ -51,41 +69,72 @@ def refresh_one(symbol: str, name: str, sector: str, *, skip_if_fresh: bool = Fa
         staleness = store.get_staleness()
         age = staleness.get(symbol.upper(), 9999)
         if age < REFRESH_INTERVAL_MINUTES * 60:
-            print(f"[scheduler] {symbol} fresh ({age:.0f}s old), skipping")
+            _log("INFO", f"Fresh ({age:.0f}s old), skipping", symbol)
             return
 
-    with _lock:
+    with _refresh_lock:
         _current_symbol = symbol
 
-    print(f"[scheduler] Refreshing {symbol} …")
+    _log("INFO", "Starting refresh …", symbol)
+    t0 = time.time()
     try:
-        df = get_history(symbol)
+        from data.analysis import load_config
+        cfg    = load_config()
+        period = cfg.get("history_period", "6mo")
+
+        _log("INFO", f"Fetching {period} OHLCV history …", symbol)
+        df = get_history(symbol, period=period)
+        if df is None:
+            _log("WARN", "No price history returned — skipping", symbol)
+            return
+        _log("INFO", f"Got {len(df)} candles", symbol)
+
         info = get_info(symbol, df)
-        info["longName"] = name          # override with human-readable name
+        info["longName"] = name
+
+        _log("INFO", "Fetching news …", symbol)
         news = get_news(symbol, name)
-        result = full_analysis(symbol, df, info, news)
+        neg  = news.get("negative_score", 0)
+        _log("INFO", f"News: {news.get('headline_count', 0)} headlines, neg_score={neg:.2f}", symbol)
+
+        _log("INFO", "Fetching fundamentals …", symbol)
+        fundamentals = get_fundamentals(symbol)
+        pe = fundamentals.get("trailing_pe")
+        _log("INFO", f"Fundamentals: PE={pe}", symbol)
+
+        result    = full_analysis(symbol, df, info, news, cfg=cfg, fundamentals=fundamentals)
         result["sector"] = sector
+
+        sig     = result.get("signal", {})
+        val     = result.get("valuation", {})
+        elapsed = time.time() - t0
+        _log("SUCCESS",
+             f"Signal={sig.get('signal','?')} ({sig.get('confidence','?')}%) "
+             f"| Valuation={val.get('status','?')} "
+             f"| Price={result.get('current_price','?')} "
+             f"| Done in {elapsed:.1f}s",
+             symbol)
         store.upsert(symbol, name, sector, result)
-        print(f"[scheduler] ✓ {symbol} saved")
+
     except Exception as e:
-        print(f"[scheduler] ✗ {symbol} error: {e}")
+        _log("ERROR", f"{type(e).__name__}: {e}", symbol)
     finally:
-        with _lock:
+        with _refresh_lock:
             _current_symbol = ""
 
 
 def refresh_all():
-    """Full pass — iterate every stock one-by-one with a polite delay."""
-    stocks = _load_stocks()
-    print(f"[scheduler] Starting full refresh of {len(stocks)} stocks")
+    """Full pass — iterate every active watchlist stock one-by-one with a polite delay."""
+    stocks = store.watchlist_get_all()
+    _log("INFO", f"⟳ Starting full refresh — {len(stocks)} stocks")
     for s in stocks:
         symbol = s["symbol"]
-        name = s.get("name", symbol)
+        name   = s.get("name", symbol)
         sector = s.get("sector", "Other")
         refresh_one(symbol, name, sector, skip_if_fresh=False)
         delay = random.uniform(*INTER_STOCK_DELAY)
         time.sleep(delay)
-    print(f"[scheduler] Full refresh complete")
+    _log("INFO", "⟳ Full refresh complete")
 
 
 # ── Singleton scheduler ───────────────────────────────────────────────────────
@@ -93,26 +142,16 @@ def refresh_all():
 _scheduler = BackgroundScheduler(timezone="Asia/Kolkata")
 
 
-def start(run_now: bool = True):
+def start(run_now: bool = False):
     """
     Start the background scheduler.
-    If run_now=True, trigger an immediate first pass so the DB is
-    populated right away without waiting 15 minutes.
+    Auto-refresh is disabled — data is refreshed only on manual trigger
+    or when a new stock is added via the API.
     """
-    _scheduler.add_job(
-        refresh_all,
-        trigger=IntervalTrigger(minutes=REFRESH_INTERVAL_MINUTES),
-        id="refresh_all",
-        replace_existing=True,
-        max_instances=1,
-        coalesce=True,
-        misfire_grace_time=60,
-    )
     _scheduler.start()
-    print(f"[scheduler] Started — interval {REFRESH_INTERVAL_MINUTES} min")
+    _log("INFO", "Scheduler started — manual-refresh-only mode")
 
     if run_now:
-        # Run in a daemon thread so startup doesn't block
         t = threading.Thread(target=refresh_all, name="initial-refresh", daemon=True)
         t.start()
 
@@ -121,7 +160,7 @@ def stop():
     """Gracefully shut down the scheduler."""
     try:
         _scheduler.shutdown(wait=False)
-        print("[scheduler] Stopped")
+        _log("INFO", "Scheduler stopped")
     except Exception:
         pass
 
@@ -129,7 +168,7 @@ def stop():
 def status() -> dict:
     """Return status info for the /api/scheduler/status endpoint."""
     job = _scheduler.get_job("refresh_all")
-    with _lock:
+    with _refresh_lock:
         current = _current_symbol
 
     next_run = None
@@ -137,16 +176,16 @@ def status() -> dict:
         next_run = job.next_run_time.isoformat()
 
     staleness = store.get_staleness()
-    oldest = max(staleness.values(), default=0) if staleness else 0
+    oldest   = max(staleness.values(), default=0) if staleness else 0
     freshest = min(staleness.values(), default=0) if staleness else 0
 
     return {
-        "running": _scheduler.running,
-        "current_symbol": current,
-        "next_run": next_run,
-        "interval_minutes": REFRESH_INTERVAL_MINUTES,
-        "total_cached": len(staleness),
-        "oldest_data_age_sec": oldest,
+        "running":               _scheduler.running,
+        "current_symbol":        current,
+        "next_run":              next_run,
+        "interval_minutes":      REFRESH_INTERVAL_MINUTES,
+        "total_cached":          len(staleness),
+        "oldest_data_age_sec":   oldest,
         "freshest_data_age_sec": freshest,
-        "per_symbol_age_sec": staleness,
+        "per_symbol_age_sec":    staleness,
     }

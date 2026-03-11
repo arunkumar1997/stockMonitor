@@ -1,13 +1,11 @@
 import React from "react";
-import { ThemeProvider, CssBaseline } from "@mui/material";
-import theme from "./theme";
+import { AppThemeProvider } from "./ThemeContext";
 import Dashboard from "./components/Dashboard";
 
 export default function App() {
   return (
-    <ThemeProvider theme={theme}>
-      <CssBaseline />
+    <AppThemeProvider>
       <Dashboard />
-    </ThemeProvider>
+    </AppThemeProvider>
   );
 }
