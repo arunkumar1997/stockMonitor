@@ -1,0 +1,24 @@
+# Task: Yahoo Finance Data Scraping Investigation
+
+## Checklist
+- [x] Investigate `https://finance.yahoo.com/quote/CIPLA.NS/history/`
+    - [x] Check for "Download" button (CSV) - **NOT FOUND (possibly requires login or moved)**
+    - [x] Identify URL pattern for CSV download - **Manual construction: `https://query1.finance.yahoo.com/v7/finance/download/CIPLA.NS?period1={start}&period2={end}&interval=1d&events=history&includeAdjustedClose=true`**
+    - [x] Observe table structure for scraping - **Standard HTML table with headers: Date, Open, High, Low, Close, Adj Close, Volume.**
+- [x] Investigate `https://finance.yahoo.com/quote/CIPLA.NS/`
+    - [x] Identify selectors for current price, previous close, 52-week range, etc. - **`fin-streamer[data-field="regularMarketPrice"]`, and table rows in the summary table.**
+- [x] Investigate `https://finance.yahoo.com/quote/CIPLA.NS/key-statistics/`
+    - [x] Identify selectors for P/E, cashflow, debt/equity, etc. - **Values are in tables; labels like "Trailing P/E", "Total Debt/Equity (mrq)", etc. can be used to find corresponding values.**
+- [x] Check for cookie/consent walls - **None observed.**
+
+## Findings
+- **CSV Download:** Not visible on page. Manual URL construction is reliable: `https://query1.finance.yahoo.com/v7/finance/download/{TICKER}?period1={T1}&period2={T2}&interval=1d&events=history`
+- **Page Structure (Scraping):** 
+    - History: `table` with rows.
+    - Summary: `fin-streamer` for live data, `table` for quote details.
+    - Stats: Multiple `table` elements with labels in first column and values in second.
+- **Cookie Wall:** None.
+- **Key Selectors:**
+    - Live Price: `fin-streamer[data-field="regularMarketPrice"][data-symbol="CIPLA.NS"]`
+    - Quote Table: `div[data-test="left-summary-table"]` (old) or `section` with specific classes.
+    - Stats Tables: `section` with titles like "Valuation Measures", "Financial Highlights".

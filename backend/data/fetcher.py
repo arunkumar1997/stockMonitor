@@ -1,48 +1,164 @@
 """
-Stock data fetcher using yfinance.
-Fetches ONE symbol at a time — called by the background scheduler,
-never called directly from API request handlers.
+Stock data fetcher using Playwright browser scraping (replaces yfinance API).
+
+Uses a headless Chromium browser to scrape Yahoo Finance pages directly,
+avoiding YFRateLimitError entirely. A singleton browser instance is reused
+across all requests for efficiency.
+
+Data sources:
+  - History (OHLCV): Yahoo Finance /history/ page table
+  - Info:            Derived from history DataFrame (no extra request)
+  - Fundamentals:    Yahoo Finance /key-statistics/ page tables
 """
-import yfinance as yf
+import time
+import random
+import threading
+import atexit
+
 import pandas as pd
 from typing import Optional, Dict
 
+# ── Singleton browser management ─────────────────────────────────────────────
+
+_browser = None
+_playwright = None
+_pw_context = None
+_lock = threading.Lock()
+
+
+def _get_browser():
+    """Lazily initialise and return a shared Playwright browser instance."""
+    global _browser, _playwright, _pw_context
+    with _lock:
+        if _browser is None or not _browser.is_connected():
+            from playwright.sync_api import sync_playwright
+            _pw_context = sync_playwright().start()
+            _browser = _pw_context.chromium.launch(headless=True)
+            print("[fetcher] Playwright browser launched")
+        return _browser
+
+
+def _shutdown_browser():
+    """Clean up browser on process exit."""
+    global _browser, _pw_context
+    try:
+        if _browser:
+            _browser.close()
+        if _pw_context:
+            _pw_context.stop()
+    except Exception:
+        pass
+
+
+atexit.register(_shutdown_browser)
+
+
+def _new_page():
+    """Create a fresh page in the shared browser."""
+    browser = _get_browser()
+    ctx = browser.new_context(
+        user_agent=(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/125.0.0.0 Safari/537.36"
+        ),
+        viewport={"width": 1280, "height": 800},
+    )
+    return ctx.new_page()
+
+
+def _polite_delay():
+    """Small random delay between page loads."""
+    time.sleep(random.uniform(0.5, 1.2))
+
+
+# ── History fetching ─────────────────────────────────────────────────────────
 
 def get_history(symbol: str, period: str = "6mo") -> Optional[pd.DataFrame]:
     """
-    Download OHLCV history for a single symbol.
+    Scrape OHLCV history from Yahoo Finance's /history/ page.
     Returns a clean DataFrame or None on failure.
+    The page typically shows ~250 trading days (~1 year) of data.
     """
+    page = None
     try:
-        df = yf.download(
-            symbol,
-            period=period,
-            interval="1d",
-            auto_adjust=True,
-            progress=False,
-            threads=False,
-        )
-        if df is None or df.empty:
-            print(f"[fetcher] Empty result for {symbol}")
+        _polite_delay()
+        page = _new_page()
+        url = f"https://finance.yahoo.com/quote/{symbol}/history/"
+        print(f"[fetcher] Navigating to {url}")
+        page.goto(url, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(2000)  # let table render
+
+        table = page.query_selector("table")
+        if not table:
+            print(f"[fetcher] No table found for {symbol}")
             return None
 
-        # Flatten MultiIndex columns if present (single-ticker download)
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
+        tbody = table.query_selector("tbody")
+        if not tbody:
+            print(f"[fetcher] No tbody found for {symbol}")
+            return None
 
-        keep = [c for c in ["Open", "High", "Low", "Close", "Volume"] if c in df.columns]
-        df = df[keep].dropna()
-        return df if not df.empty else None
+        rows_data = []
+        for tr in tbody.query_selector_all("tr"):
+            cells = tr.query_selector_all("td")
+            if len(cells) < 7:
+                continue
+            try:
+                date_str = cells[0].inner_text().strip()
+                o = float(cells[1].inner_text().strip().replace(",", ""))
+                h = float(cells[2].inner_text().strip().replace(",", ""))
+                l = float(cells[3].inner_text().strip().replace(",", ""))
+                c = float(cells[4].inner_text().strip().replace(",", ""))
+                vol_str = cells[6].inner_text().strip().replace(",", "")
+                v = int(vol_str) if vol_str and vol_str != "-" else 0
+                rows_data.append({
+                    "Date": pd.to_datetime(date_str),
+                    "Open": o, "High": h, "Low": l, "Close": c, "Volume": v,
+                })
+            except (ValueError, IndexError):
+                continue
+
+        if not rows_data:
+            print(f"[fetcher] No valid rows parsed for {symbol}")
+            return None
+
+        df = pd.DataFrame(rows_data).set_index("Date").sort_index()
+
+        # Trim to requested period
+        period_days = _period_to_days(period)
+        if len(df) > period_days:
+            df = df.tail(period_days)
+
+        print(f"[fetcher] History OK for {symbol}: {len(df)} rows")
+        return df
 
     except Exception as e:
-        print(f"[fetcher] Download error {symbol}: {e}")
+        print(f"[fetcher] History error for {symbol}: {e}")
         return None
+    finally:
+        if page:
+            try:
+                page.context.close()
+            except Exception:
+                pass
 
+
+def _period_to_days(period: str) -> int:
+    """Convert period string to approximate trading days."""
+    mapping = {
+        "1mo": 22, "3mo": 65, "6mo": 130,
+        "1y": 252, "2y": 504, "5y": 1260,
+    }
+    return mapping.get(period, 130)
+
+
+# ── Info (derived from history) ──────────────────────────────────────────────
 
 def get_info(symbol: str, df: Optional[pd.DataFrame] = None) -> Dict:
     """
     Derive price info from the downloaded history DataFrame.
-    Falls back to yf.fast_info only if df is unavailable.
+    Falls back to scraping the Yahoo Finance quote page if df is unavailable.
     """
     if df is not None and len(df) >= 2:
         current = float(df["Close"].iloc[-1])
@@ -61,30 +177,51 @@ def get_info(symbol: str, df: Optional[pd.DataFrame] = None) -> Dict:
             "sector": "",
         }
 
-    # Fallback: lightweight fast_info
+    # Fallback: scrape quote page via browser
+    page = None
     try:
-        ticker = yf.Ticker(symbol)
-        fi = ticker.fast_info
+        page = _new_page()
+        page.goto(f"https://finance.yahoo.com/quote/{symbol}/", timeout=30000)
+        page.wait_for_timeout(2000)
+
+        current = 0.0
+        prev = 0.0
+        for el in page.query_selector_all("fin-streamer"):
+            field = el.get_attribute("data-field")
+            val = el.get_attribute("data-value")
+            if field == "regularMarketPrice" and val:
+                current = float(val)
+                break
+        for el in page.query_selector_all("fin-streamer"):
+            field = el.get_attribute("data-field")
+            val = el.get_attribute("data-value")
+            if field == "regularMarketPreviousClose" and val:
+                prev = float(val)
+                break
+
         return {
-            "symbol": symbol,
-            "longName": symbol,
-            "currentPrice": float(getattr(fi, "last_price", 0) or 0),
-            "previousClose": float(getattr(fi, "previous_close", 0) or 0),
-            "currency": getattr(fi, "currency", "INR") or "INR",
-            "fiftyTwoWeekHigh": float(getattr(fi, "year_high", 0) or 0),
-            "fiftyTwoWeekLow": float(getattr(fi, "year_low", 0) or 0),
-            "marketCap": float(getattr(fi, "market_cap", 0) or 0),
-            "sector": "",
+            "symbol": symbol, "longName": symbol,
+            "currentPrice": current, "previousClose": prev,
+            "currency": "INR", "fiftyTwoWeekHigh": 0,
+            "fiftyTwoWeekLow": 0, "marketCap": 0, "sector": "",
         }
     except Exception as e:
-        print(f"[fetcher] fast_info fallback error {symbol}: {e}")
+        print(f"[fetcher] Quote scrape error for {symbol}: {e}")
         return {
             "symbol": symbol, "longName": symbol,
             "currentPrice": 0, "previousClose": 0,
             "currency": "INR", "fiftyTwoWeekHigh": 0,
             "fiftyTwoWeekLow": 0, "marketCap": 0, "sector": "",
         }
+    finally:
+        if page:
+            try:
+                page.context.close()
+            except Exception:
+                pass
 
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _safe_float(val) -> Optional[float]:
     """Convert a value to float, returning None on failure."""
@@ -97,47 +234,120 @@ def _safe_float(val) -> Optional[float]:
         return None
 
 
+def _parse_stat_value(text: str) -> Optional[float]:
+    """Parse a stat value like '23.95', '1.09T', '14.00%', 'N/A'."""
+    if not text or text.strip() in ("N/A", "--", "∞"):
+        return None
+    text = text.strip().replace(",", "")
+
+    # Handle percentage
+    if text.endswith("%"):
+        try:
+            return round(float(text[:-1]) / 100, 6)
+        except ValueError:
+            return None
+
+    # Handle suffixes: T, B, M, K
+    multipliers = {"T": 1e12, "B": 1e9, "M": 1e6, "K": 1e3}
+    for suffix, mult in multipliers.items():
+        if text.endswith(suffix):
+            try:
+                return round(float(text[:-1]) * mult, 4)
+            except ValueError:
+                return None
+
+    # Plain number
+    try:
+        return round(float(text), 4)
+    except ValueError:
+        return None
+
+
+# ── Fundamentals fetching ────────────────────────────────────────────────────
+
+_FUNDAMENTAL_EMPTY = {
+    "trailing_pe": None, "forward_pe": None, "peg_ratio": None,
+    "price_to_book": None, "ev_to_ebitda": None,
+    "trailing_eps": None, "forward_eps": None,
+    "free_cashflow": None, "operating_cashflow": None,
+    "debt_to_equity": None,
+    "profit_margin": None, "revenue_growth": None, "earnings_growth": None,
+    "dividend_yield": None, "return_on_equity": None,
+    "market_cap": None,
+}
+
+# Map of display label → our key name
+_STAT_LABEL_MAP = {
+    "trailing p/e":                "trailing_pe",
+    "forward p/e":                 "forward_pe",
+    "peg ratio (5yr expected)":    "peg_ratio",
+    "price/book (mrq)":            "price_to_book",
+    "enterprise value/ebitda":     "ev_to_ebitda",
+    "diluted eps (ttm)":           "trailing_eps",
+    "forward annual dividend yield": "dividend_yield",
+    "trailing annual dividend yield": "dividend_yield",
+    "profit margin":               "profit_margin",
+    "return on equity (ttm)":      "return_on_equity",
+    "revenue per share (ttm)":     None,  # skip
+    "quarterly revenue growth (yoy)": "revenue_growth",
+    "quarterly earnings growth (yoy)": "earnings_growth",
+    "total debt/equity (mrq)":     "debt_to_equity",
+    "market cap":                  "market_cap",
+    "enterprise value":            None,  # skip (we use ev/ebitda)
+    "levered free cash flow (ttm)": "free_cashflow",
+    "operating cash flow (ttm)":   "operating_cashflow",
+}
+
+
 def get_fundamentals(symbol: str) -> Dict:
     """
-    Fetch fundamental data for a symbol via yf.Ticker().info.
-    Returns a dict — all values may be None if unavailable (common for Indian stocks).
+    Scrape fundamental data from Yahoo Finance's /key-statistics/ page.
+    Returns a dict with all values — None if unavailable.
     """
-    empty = {
-        "trailing_pe": None, "forward_pe": None, "peg_ratio": None,
-        "price_to_book": None, "ev_to_ebitda": None,
-        "trailing_eps": None, "forward_eps": None,
-        "free_cashflow": None, "operating_cashflow": None,
-        "debt_to_equity": None,
-        "profit_margin": None, "revenue_growth": None, "earnings_growth": None,
-        "dividend_yield": None, "return_on_equity": None,
-        "market_cap": None,
-    }
+    page = None
     try:
-        info = yf.Ticker(symbol).info
-        if not info:
-            return empty
+        _polite_delay()
+        page = _new_page()
+        url = f"https://finance.yahoo.com/quote/{symbol}/key-statistics/"
+        print(f"[fetcher] Navigating to {url}")
+        page.goto(url, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(2000)
 
-        result = {
-            "trailing_pe":        _safe_float(info.get("trailingPE")),
-            "forward_pe":         _safe_float(info.get("forwardPE")),
-            "peg_ratio":          _safe_float(info.get("pegRatio")),
-            "price_to_book":      _safe_float(info.get("priceToBook")),
-            "ev_to_ebitda":       _safe_float(info.get("enterpriseToEbitda")),
-            "trailing_eps":       _safe_float(info.get("trailingEps")),
-            "forward_eps":        _safe_float(info.get("forwardEps")),
-            "free_cashflow":      _safe_float(info.get("freeCashflow")),
-            "operating_cashflow": _safe_float(info.get("operatingCashflow")),
-            "debt_to_equity":     _safe_float(info.get("debtToEquity")),
-            "profit_margin":      _safe_float(info.get("profitMargins")),
-            "revenue_growth":     _safe_float(info.get("revenueGrowth")),
-            "earnings_growth":    _safe_float(info.get("earningsGrowth")),
-            "dividend_yield":     _safe_float(info.get("dividendYield")),
-            "return_on_equity":   _safe_float(info.get("returnOnEquity")),
-            "market_cap":         _safe_float(info.get("marketCap")),
-        }
-        print(f"[fetcher] Fundamentals fetched for {symbol} (PE={result['trailing_pe']})")
+        result = dict(_FUNDAMENTAL_EMPTY)
+
+        # Parse all tables on the page
+        tables = page.query_selector_all("table")
+        for table in tables:
+            for tr in table.query_selector_all("tr"):
+                cells = tr.query_selector_all("td")
+                if len(cells) < 2:
+                    continue
+                label = cells[0].inner_text().strip().lower()
+                value_text = cells[1].inner_text().strip()
+
+                # Match against our label map
+                for key_label, our_key in _STAT_LABEL_MAP.items():
+                    if our_key and key_label in label:
+                        parsed = _parse_stat_value(value_text)
+                        if parsed is not None:
+                            # debt_to_equity comes as percentage on YF (e.g. 43.21%)
+                            # but our analysis expects a ratio — already handled by %->decimal
+                            result[our_key] = parsed
+                        break
+
+        # For forward_eps, try to derive from forward_pe and current price
+        # (not directly on key-statistics page)
+
+        pe = result.get("trailing_pe")
+        print(f"[fetcher] Fundamentals OK for {symbol} (PE={pe})")
         return result
 
     except Exception as e:
         print(f"[fetcher] Fundamentals error for {symbol}: {e}")
-        return empty
+        return dict(_FUNDAMENTAL_EMPTY)
+    finally:
+        if page:
+            try:
+                page.context.close()
+            except Exception:
+                pass

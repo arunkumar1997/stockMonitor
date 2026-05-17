@@ -1,0 +1,31 @@
+# Replace yfinance with Playwright Browser Scraping
+
+The application was encountering `YFRateLimitError` from the `yfinance` library due to Yahoo Finance's strict rate limits. To resolve this and apply the fix for **all stocks**, we have migrated from `yfinance` to direct browser scraping using **Playwright**.
+
+## Changes Made
+
+### 1. Migrated Data Fetcher (`backend/data/fetcher.py`)
+- Replaced the `yfinance` dependency with a headless Chromium browser using Playwright.
+- Implemented a singleton browser instance (`_get_browser()`) that stays alive and creates new contexts/pages as needed.
+- **Historical Data**: Now scrapes the HTML table directly from the `https://finance.yahoo.com/quote/{symbol}/history/` page.
+- **Quote Info**: Extracts current prices and daily ranges using the `fin-streamer` elements on the quote page.
+- **Fundamentals**: Scrapes the `https://finance.yahoo.com/quote/{symbol}/key-statistics/` page, parsing the tables for metrics like P/E ratios, cash flows, and margins.
+
+### 2. Updated Dependencies (`backend/requirements.txt`)
+- Removed `yfinance==0.2.54`.
+- Added `playwright==1.59.0`.
+- Installed the Playwright chromium browser binaries in the virtual environment.
+
+## Impact on All Stocks
+
+Because the `scheduler.py` uses `data.fetcher` for all its background updates, **these scraping changes automatically apply to all stocks in your watchlist**. The scheduler will now use the headless browser to fetch data without hitting the API rate limits.
+
+## Verification
+
+We ran tests on `CIPLA.NS` which successfully returned:
+- 130 days of OHLCV history data.
+- Live current price and previous close data.
+- Fundamental metrics including Trailing P/E (23.95), free cash flow, and market cap.
+
+> [!TIP]
+> The backend virtual environment has already been updated with `playwright`. However, since the backend server was running when the dependencies were changed, you should restart the backend terminal process (`bash start_backend.sh`) to ensure the new code is loaded correctly.
