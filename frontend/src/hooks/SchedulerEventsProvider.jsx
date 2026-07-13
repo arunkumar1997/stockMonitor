@@ -25,10 +25,10 @@ const LOG_CAP = 500;
 
 function createStore() {
   let state = {
-    status: null,                 // whole scheduler.status() blob (or null pre-snapshot)
-    lastFetchStatus: {},          // { "SYM.NS": { status, message, ts } }
-    logs: [],                     // newest first, capped at LOG_CAP
-    connected: false,             // true while the EventSource is open
+    status: null, // whole scheduler.status() blob (or null pre-snapshot)
+    lastFetchStatus: {}, // { "SYM.NS": { status, message, ts } }
+    logs: [], // newest first, capped at LOG_CAP
+    connected: false, // true while the EventSource is open
   };
   const listeners = new Set();
 
@@ -178,7 +178,7 @@ export function SchedulerEventsProvider({ children }) {
       if (failureCount === 5) {
         console.warn(
           "[scheduler-sse] EventSource has failed 5+ times in a row; " +
-            "browser is auto-reconnecting."
+            "browser is auto-reconnecting.",
         );
       }
     };

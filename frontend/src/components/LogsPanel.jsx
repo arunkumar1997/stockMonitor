@@ -18,9 +18,9 @@ import { useSchedulerLogs } from "../hooks/useSchedulerEvents";
 
 const LEVEL_STYLES = {
   SUCCESS: { color: "#00e676", bg: "rgba(0,230,118,0.08)", icon: "✓" },
-  ERROR:   { color: "#ff5252", bg: "rgba(255,82,82,0.08)",  icon: "✗" },
-  WARN:    { color: "#ffa726", bg: "rgba(255,167,38,0.08)", icon: "⚠" },
-  INFO:    { color: "#64b5f6", bg: "transparent",           icon: "ℹ" },
+  ERROR: { color: "#ff5252", bg: "rgba(255,82,82,0.08)", icon: "✗" },
+  WARN: { color: "#ffa726", bg: "rgba(255,167,38,0.08)", icon: "⚠" },
+  INFO: { color: "#64b5f6", bg: "transparent", icon: "ℹ" },
 };
 
 function LogRow({ entry }) {
@@ -41,16 +41,30 @@ function LogRow({ entry }) {
       }}
     >
       {/* Icon */}
-      <Typography sx={{ color: st.color, fontSize: "0.75rem", fontWeight: 800, minWidth: 14, mt: 0.1 }}>
+      <Typography
+        sx={{
+          color: st.color,
+          fontSize: "0.75rem",
+          fontWeight: 800,
+          minWidth: 14,
+          mt: 0.1,
+        }}
+      >
         {st.icon}
       </Typography>
 
       {/* Timestamp */}
       <Typography
         component="span"
-        sx={{ color: "text.disabled", fontSize: "0.65rem", fontFamily: "monospace", flexShrink: 0, mt: 0.1 }}
+        sx={{
+          color: "text.disabled",
+          fontSize: "0.65rem",
+          fontFamily: "monospace",
+          flexShrink: 0,
+          mt: 0.1,
+        }}
       >
-        {entry.ts.slice(11)}   {/* HH:MM:SS */}
+        {entry.ts.slice(11)} {/* HH:MM:SS */}
       </Typography>
 
       {/* Symbol chip */}
@@ -59,7 +73,10 @@ function LogRow({ entry }) {
           label={entry.symbol}
           size="small"
           sx={{
-            height: 16, fontSize: "0.58rem", fontWeight: 800, flexShrink: 0,
+            height: 16,
+            fontSize: "0.58rem",
+            fontWeight: 800,
+            flexShrink: 0,
             fontFamily: "monospace",
             background: "rgba(255,255,255,0.08)",
             color: "text.secondary",
@@ -139,7 +156,7 @@ export default function LogsPanel({ open, onClose }) {
   const logs = paused && frozenLogs ? frozenLogs : visibleLogs;
 
   const [autoScroll, setAutoScroll] = useState(true);
-  const [filter,     setFilter]     = useState("ALL");  // ALL | SUCCESS | ERROR | WARN | INFO
+  const [filter, setFilter] = useState("ALL"); // ALL | SUCCESS | ERROR | WARN | INFO
   const bottomRef = useRef(null);
 
   // Auto-scroll to bottom when new entries arrive
@@ -149,13 +166,14 @@ export default function LogsPanel({ open, onClose }) {
     }
   }, [logs, autoScroll, paused]);
 
-  const filtered = filter === "ALL" ? logs : logs.filter((l) => l.level === filter);
+  const filtered =
+    filter === "ALL" ? logs : logs.filter((l) => l.level === filter);
 
   const levelCounts = {
     SUCCESS: logs.filter((l) => l.level === "SUCCESS").length,
-    ERROR:   logs.filter((l) => l.level === "ERROR").length,
-    WARN:    logs.filter((l) => l.level === "WARN").length,
-    INFO:    logs.filter((l) => l.level === "INFO").length,
+    ERROR: logs.filter((l) => l.level === "ERROR").length,
+    WARN: logs.filter((l) => l.level === "WARN").length,
+    INFO: logs.filter((l) => l.level === "INFO").length,
   };
 
   return (
@@ -166,40 +184,68 @@ export default function LogsPanel({ open, onClose }) {
       PaperProps={{
         sx: {
           width: { xs: "100%", sm: 520 },
-          background: (t) => t.palette.mode === "dark"
-            ? "linear-gradient(180deg, #0d1117 0%, #111827 100%)"
-            : "linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%)",
+          background: (t) =>
+            t.palette.mode === "dark"
+              ? "linear-gradient(180deg, #0d1117 0%, #111827 100%)"
+              : "linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%)",
           display: "flex",
           flexDirection: "column",
         },
       }}
     >
       {/* Header */}
-      <Box sx={{
-        px: 2.5, py: 2,
-        borderBottom: "1px solid",
-        borderColor: "divider",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        flexShrink: 0,
-      }}>
+      <Box
+        sx={{
+          px: 2.5,
+          py: 2,
+          borderBottom: "1px solid",
+          borderColor: "divider",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          flexShrink: 0,
+        }}
+      >
         <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
-          <Typography variant="h6" fontWeight={800}>📋 Refresh Logs</Typography>
+          <Typography variant="h6" fontWeight={800}>
+            📋 Refresh Logs
+          </Typography>
           <Chip
             label={`${logs.length} entries`}
             size="small"
-            sx={{ height: 20, fontSize: "0.65rem", background: "rgba(255,255,255,0.06)" }}
+            sx={{
+              height: 20,
+              fontSize: "0.65rem",
+              background: "rgba(255,255,255,0.06)",
+            }}
           />
           {levelCounts.ERROR > 0 && (
-            <Chip label={`${levelCounts.ERROR} errors`} size="small"
-              sx={{ height: 20, fontSize: "0.65rem", background: "rgba(255,82,82,0.15)", color: "#ff5252" }} />
+            <Chip
+              label={`${levelCounts.ERROR} errors`}
+              size="small"
+              sx={{
+                height: 20,
+                fontSize: "0.65rem",
+                background: "rgba(255,82,82,0.15)",
+                color: "#ff5252",
+              }}
+            />
           )}
         </Box>
         <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-          <Tooltip title={paused ? "Resume live updates" : "Pause live updates"}>
-            <IconButton size="small" onClick={() => setPaused((p) => !p)} sx={{ color: paused ? "#ffa726" : "text.secondary" }}>
-              {paused ? <PlayArrowIcon fontSize="small" /> : <PauseIcon fontSize="small" />}
+          <Tooltip
+            title={paused ? "Resume live updates" : "Pause live updates"}
+          >
+            <IconButton
+              size="small"
+              onClick={() => setPaused((p) => !p)}
+              sx={{ color: paused ? "#ffa726" : "text.secondary" }}
+            >
+              {paused ? (
+                <PlayArrowIcon fontSize="small" />
+              ) : (
+                <PauseIcon fontSize="small" />
+              )}
             </IconButton>
           </Tooltip>
           <Tooltip title="Clear display (doesn't delete from server)">
@@ -218,16 +264,19 @@ export default function LogsPanel({ open, onClose }) {
       </Box>
 
       {/* Filter bar */}
-      <Box sx={{
-        px: 2, py: 1,
-        borderBottom: "1px solid",
-        borderColor: "divider",
-        display: "flex",
-        gap: 0.75,
-        flexWrap: "wrap",
-        alignItems: "center",
-        flexShrink: 0,
-      }}>
+      <Box
+        sx={{
+          px: 2,
+          py: 1,
+          borderBottom: "1px solid",
+          borderColor: "divider",
+          display: "flex",
+          gap: 0.75,
+          flexWrap: "wrap",
+          alignItems: "center",
+          flexShrink: 0,
+        }}
+      >
         {["ALL", "SUCCESS", "ERROR", "WARN", "INFO"].map((lvl) => {
           const st = LEVEL_STYLES[lvl] || { color: "text.secondary" };
           const cnt = lvl === "ALL" ? logs.length : levelCounts[lvl];
@@ -238,10 +287,19 @@ export default function LogsPanel({ open, onClose }) {
               size="small"
               onClick={() => setFilter(lvl)}
               sx={{
-                height: 22, fontSize: "0.65rem", fontWeight: filter === lvl ? 800 : 500, cursor: "pointer",
-                background: filter === lvl ? (st.bg || "rgba(255,255,255,0.12)") : "rgba(255,255,255,0.04)",
-                color: filter === lvl ? (st.color || "text.primary") : "text.secondary",
-                border: `1px solid ${filter === lvl ? (st.color || "rgba(255,255,255,0.3)") : "transparent"}`,
+                height: 22,
+                fontSize: "0.65rem",
+                fontWeight: filter === lvl ? 800 : 500,
+                cursor: "pointer",
+                background:
+                  filter === lvl
+                    ? st.bg || "rgba(255,255,255,0.12)"
+                    : "rgba(255,255,255,0.04)",
+                color:
+                  filter === lvl
+                    ? st.color || "text.primary"
+                    : "text.secondary",
+                border: `1px solid ${filter === lvl ? st.color || "rgba(255,255,255,0.3)" : "transparent"}`,
               }}
             />
           );
@@ -249,9 +307,17 @@ export default function LogsPanel({ open, onClose }) {
         <Box sx={{ ml: "auto" }}>
           <FormControlLabel
             control={
-              <Switch checked={autoScroll} onChange={(e) => setAutoScroll(e.target.checked)} size="small" />
+              <Switch
+                checked={autoScroll}
+                onChange={(e) => setAutoScroll(e.target.checked)}
+                size="small"
+              />
             }
-            label={<Typography variant="caption" color="text.secondary">Auto-scroll</Typography>}
+            label={
+              <Typography variant="caption" color="text.secondary">
+                Auto-scroll
+              </Typography>
+            }
             labelPlacement="start"
             sx={{ mr: 0, gap: 0.5 }}
           />
@@ -271,38 +337,49 @@ export default function LogsPanel({ open, onClose }) {
           </Box>
         ) : (
           // Reverse to show oldest at top → newest at bottom (like a terminal)
-          [...filtered].reverse().map((entry) => (
-            <LogRow key={entry.id} entry={entry} />
-          ))
+          [...filtered]
+            .reverse()
+            .map((entry) => <LogRow key={entry.id} entry={entry} />)
         )}
         <div ref={bottomRef} />
       </Box>
 
       {/* Footer status */}
-      <Box sx={{
-        px: 2, py: 1,
-        borderTop: "1px solid",
-        borderColor: "divider",
-        display: "flex",
-        alignItems: "center",
-        gap: 1,
-        flexShrink: 0,
-      }}>
-        <Box sx={{
-          width: 7, height: 7, borderRadius: "50%",
-          background: paused ? "#ffa726" : "#00e676",
-          boxShadow: paused ? "0 0 6px #ffa726" : "0 0 6px #00e676",
-          animation: paused ? "none" : "pulse 2s infinite",
-          "@keyframes pulse": {
-            "0%, 100%": { opacity: 1 },
-            "50%": { opacity: 0.4 },
-          },
-        }} />
+      <Box
+        sx={{
+          px: 2,
+          py: 1,
+          borderTop: "1px solid",
+          borderColor: "divider",
+          display: "flex",
+          alignItems: "center",
+          gap: 1,
+          flexShrink: 0,
+        }}
+      >
+        <Box
+          sx={{
+            width: 7,
+            height: 7,
+            borderRadius: "50%",
+            background: paused ? "#ffa726" : "#00e676",
+            boxShadow: paused ? "0 0 6px #ffa726" : "0 0 6px #00e676",
+            animation: paused ? "none" : "pulse 2s infinite",
+            "@keyframes pulse": {
+              "0%, 100%": { opacity: 1 },
+              "50%": { opacity: 0.4 },
+            },
+          }}
+        />
         <Typography variant="caption" color="text.secondary">
           {paused ? "Paused" : "Live \u2014 push over SSE"}
         </Typography>
         {filtered.length < logs.length && (
-          <Typography variant="caption" color="text.disabled" sx={{ ml: "auto" }}>
+          <Typography
+            variant="caption"
+            color="text.disabled"
+            sx={{ ml: "auto" }}
+          >
             Showing {filtered.length} of {logs.length}
           </Typography>
         )}

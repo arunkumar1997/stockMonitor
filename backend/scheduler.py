@@ -178,7 +178,9 @@ def _refresh_worker_loop():
         time.sleep(random.uniform(*INTER_STOCK_DELAY))
 
 
-def _do_refresh_one(symbol: str, name: str, sector: str, *, skip_if_fresh: bool = False):
+def _do_refresh_one(
+    symbol: str, name: str, sector: str, *, skip_if_fresh: bool = False
+):
     """
     Fetch + analyse a single stock and persist to SQLite.
     Called by the scheduler loop and also directly for new stocks.

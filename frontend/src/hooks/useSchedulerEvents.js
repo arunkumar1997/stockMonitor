@@ -16,13 +16,13 @@ import { useContext, useSyncExternalStore } from "react";
 import { SchedulerEventsContext } from "./SchedulerEventsContext";
 
 function useStore() {
-  const store = useContext(SchedulerEventsContext);
-  if (!store) {
-    throw new Error(
-      "useSchedulerEvents hooks must be used inside a <SchedulerEventsProvider>."
-    );
-  }
-  return store;
+    const store = useContext(SchedulerEventsContext);
+    if (!store) {
+        throw new Error(
+            "useSchedulerEvents hooks must be used inside a <SchedulerEventsProvider>."
+        );
+    }
+    return store;
 }
 
 /**
@@ -34,11 +34,11 @@ function useStore() {
  * Dashboard.
  */
 export function useSchedulerStatus() {
-  const store = useStore();
-  return useSyncExternalStore(
-    store.subscribe,
-    () => store.getState().status
-  );
+    const store = useStore();
+    return useSyncExternalStore(
+        store.subscribe,
+        () => store.getState().status
+    );
 }
 
 /**
@@ -50,12 +50,12 @@ export function useSchedulerStatus() {
  * stable for cards not involved in the current fetch.
  */
 export function useLastFetchStatus(symbol) {
-  const store = useStore();
-  const key = (symbol || "").toUpperCase();
-  return useSyncExternalStore(
-    store.subscribe,
-    () => store.getState().lastFetchStatus[key] || null
-  );
+    const store = useStore();
+    const key = (symbol || "").toUpperCase();
+    return useSyncExternalStore(
+        store.subscribe,
+        () => store.getState().lastFetchStatus[key] || null
+    );
 }
 
 /**
@@ -64,11 +64,11 @@ export function useLastFetchStatus(symbol) {
  * only rendered while open.
  */
 export function useSchedulerLogs() {
-  const store = useStore();
-  return useSyncExternalStore(
-    store.subscribe,
-    () => store.getState().logs
-  );
+    const store = useStore();
+    return useSyncExternalStore(
+        store.subscribe,
+        () => store.getState().logs
+    );
 }
 
 /**
@@ -76,11 +76,11 @@ export function useSchedulerLogs() {
  * currently no consumer.
  */
 export function useSchedulerConnected() {
-  const store = useStore();
-  return useSyncExternalStore(
-    store.subscribe,
-    () => store.getState().connected
-  );
+    const store = useStore();
+    return useSyncExternalStore(
+        store.subscribe,
+        () => store.getState().connected
+    );
 }
 
 // Re-export the provider from a single import location for consumer convenience.
