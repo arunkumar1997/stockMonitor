@@ -18,11 +18,14 @@ import SignalBadge from "./SignalBadge";
 import Sparkline from "./Sparkline";
 import NewsPanel from "./NewsPanel";
 import ConfirmDialog from "./ConfirmDialog";
-import { forceRefresh, getSchedulerStatus } from "../api";
+import { forceRefresh } from "../api";
+import { useLastFetchStatus } from "../hooks/useSchedulerEvents";
 
-// Poll cadence + safety timeout for the per-card refresh completion signal.
-// See docs/issues/006-per-card-refresh-real-completion.md.
-const REFRESH_POLL_MS = 2000;
+// Safety timeout for the per-card refresh spinner. In SSE-driven mode we
+// clear the spinner on the fetch_finished event (see #007); this timeout
+// is a defence-in-depth net for the pathological case where the SSE
+// connection is dropped and its browser-side auto-reconnect somehow
+// takes longer than 60 s to catch up.
 const REFRESH_TIMEOUT_MS = 60000;
 
 // ── Fundamental helpers ───────────────────────────────────────────────────────
@@ -205,16 +208,22 @@ function ResistanceMeter({ current, resistanceLevels, supportLevels, currency })
 function StockCard({ stock, onRemove }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  // preTs = the fetch_finished.ts we observed at click time. When the
+  // next fetchStatus arrives with a different ts, we know THIS refresh
+  // completed. Stored in a ref so it doesn't cause its own re-render.
+  const preTsRef = useRef(null);
   const { enqueueSnackbar } = useSnackbar();
-  const pollIntervalRef = useRef(null);
   const timeoutRef = useRef(null);
   const mountedRef = useRef(true);
 
-  const stopPolling = useCallback(() => {
-    if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current);
-      pollIntervalRef.current = null;
-    }
+  const symbol = stock?.symbol;
+  // Per-symbol event stream. useLastFetchStatus is memoized so this only
+  // re-renders when THIS card's symbol's status changes reference — no
+  // cross-card render on fetches for other symbols (preserves the #001
+  // acceptance signal).
+  const fetchStatus = useLastFetchStatus(symbol);
+
+  const clearSafetyTimeout = useCallback(() => {
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
       timeoutRef.current = null;
@@ -225,10 +234,6 @@ function StockCard({ stock, onRemove }) {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-        pollIntervalRef.current = null;
-      }
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
         timeoutRef.current = null;
@@ -236,31 +241,42 @@ function StockCard({ stock, onRemove }) {
     };
   }, []);
 
-  const symbol = stock?.symbol;
+  // Event-driven completion detector. Fires whenever a new fetch_finished
+  // event lands for this card's symbol; only acts if we're currently
+  // refreshing AND the ts is different from the one we snapshotted at
+  // click time.
+  //
+  // The setIsRefreshing(false) below is exactly the "subscribe to an
+  // external system, mirror its updates into local state" pattern the
+  // rule's own escape hatch permits — the store push (via the SSE
+  // provider) is what triggered this effect in the first place.
+  useEffect(() => {
+    if (!isRefreshing) return;
+    if (!fetchStatus?.ts || fetchStatus.ts === preTsRef.current) return;
+    // Fresh completion for our click.
+    clearSafetyTimeout();
+    if (fetchStatus.status === "error" && mountedRef.current) {
+      enqueueSnackbar(`Refresh failed: ${fetchStatus.message}`, {
+        variant: "error",
+      });
+    }
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (mountedRef.current) setIsRefreshing(false);
+  }, [fetchStatus, isRefreshing, enqueueSnackbar, clearSafetyTimeout]);
 
   const handleRefresh = useCallback(async () => {
     if (!symbol) return;
 
-    // The backend uppercases keys in last_fetch_status; match that here.
-    const key = symbol.toUpperCase();
-
-    // 1. Snapshot the current completion timestamp BEFORE kicking off the fetch
-    //    so we can detect a new completion by ts change.
-    let preTs = null;
-    try {
-      const snap = await getSchedulerStatus();
-      preTs = snap?.last_fetch_status?.[key]?.ts ?? null;
-    } catch {
-      // Snapshot failure is non-fatal — treat as null and proceed.
-      preTs = null;
-    }
+    // Snapshot the current completion timestamp so we can distinguish
+    // THIS refresh's fetch_finished from a stale one already in the store.
+    preTsRef.current = fetchStatus?.ts ?? null;
 
     if (!mountedRef.current) return;
     setIsRefreshing(true);
     enqueueSnackbar(`Refreshing ${symbol}…`, { variant: "info" });
 
-    // 2. Kick off the refresh. If the POST itself errors, the backend never
-    //    started work — clear the spinner immediately, no polling needed.
+    // Kick off the refresh. If the POST itself errors, the backend never
+    // started work — clear the spinner immediately, no event will come.
     try {
       await forceRefresh(symbol);
     } catch (err) {
@@ -274,45 +290,17 @@ function StockCard({ stock, onRemove }) {
 
     if (!mountedRef.current) return;
 
-    // 3. Poll last_fetch_status[SYMBOL].ts until it changes (or we time out).
-    //    Clear any prior poller first — defensive, shouldn't happen while the
-    //    button is disabled but keeps state well-formed.
-    stopPolling();
-
-    pollIntervalRef.current = setInterval(async () => {
-      // Skip polling while the tab is backgrounded to avoid wasted requests.
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
-        return;
-      }
-      let entry;
-      try {
-        const status = await getSchedulerStatus();
-        entry = status?.last_fetch_status?.[key];
-      } catch {
-        // Transient network error — keep polling; the safety timeout is the
-        // ultimate backstop.
-        return;
-      }
-      if (!mountedRef.current) return;
-      if (!entry?.ts || entry.ts === preTs) return;
-
-      // ts changed → refresh completed (successfully or with an error).
-      stopPolling();
-      if (entry.status === "error" && mountedRef.current) {
-        enqueueSnackbar(`Refresh failed: ${entry.message}`, { variant: "error" });
-      }
-      if (mountedRef.current) setIsRefreshing(false);
-    }, REFRESH_POLL_MS);
-
-    // 4. Safety timeout — never leave the button permanently disabled.
+    // Arm the safety timeout — defence-in-depth for a dropped SSE
+    // connection whose reconnect somehow lags >60 s.
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
     timeoutRef.current = setTimeout(() => {
-      stopPolling();
+      timeoutRef.current = null;
       if (mountedRef.current) {
         enqueueSnackbar("Refresh timed out — try again", { variant: "warning" });
         setIsRefreshing(false);
       }
     }, REFRESH_TIMEOUT_MS);
-  }, [symbol, enqueueSnackbar, stopPolling]);
+  }, [symbol, fetchStatus, enqueueSnackbar]);
 
   if (!stock) return null;
 
