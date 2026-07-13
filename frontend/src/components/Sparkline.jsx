@@ -54,5 +54,21 @@ function Sparkline({ data = [], positive = true, currency = "USD" }) {
   );
 }
 
-export default React.memo(Sparkline);
+// Custom comparator: sparkline is expensive (ResizeObserver + full chart
+// re-layout). Bail out unless the data actually changed. We keep it cheap by
+// only comparing length + first + last data points — good enough given the
+// upstream data is a fresh array on each refresh but stable between refreshes.
+function areEqual(prev, next) {
+  if (prev.positive !== next.positive) return false;
+  if (prev.currency !== next.currency) return false;
+  const a = prev.data;
+  const b = next.data;
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (a.length !== b.length) return false;
+  if (a.length === 0) return true;
+  return a[0] === b[0] && a[a.length - 1] === b[b.length - 1];
+}
+
+export default React.memo(Sparkline, areEqual);
 
