@@ -7,6 +7,7 @@ Jobs:
   refresh_all  — every 15 min, iterates stocks one-by-one
   refresh_one  — on-demand (called when a new stock is added)
 """
+
 import random
 import time
 import threading
@@ -21,12 +22,12 @@ from data.news import get_news
 from data import store
 
 REFRESH_INTERVAL_MINUTES = 15
-INTER_STOCK_DELAY = (1.5, 3.5)   # random sleep (seconds) between each stock
+INTER_STOCK_DELAY = (1.5, 3.5)  # random sleep (seconds) between each stock
 
 # ── In-memory log buffer ──────────────────────────────────────────────────────
-_log_buffer: deque = deque(maxlen=500)   # last 500 entries
+_log_buffer: deque = deque(maxlen=500)  # last 500 entries
 _log_lock = threading.Lock()
-_log_seq = 0   # monotonic counter
+_log_seq = 0  # monotonic counter
 
 
 def _log(level: str, message: str, symbol: str = ""):
@@ -34,13 +35,15 @@ def _log(level: str, message: str, symbol: str = ""):
     global _log_seq
     with _log_lock:
         _log_seq += 1
-        _log_buffer.append({
-            "id":      _log_seq,
-            "ts":      datetime.now().isoformat(timespec="seconds"),
-            "level":   level,       # INFO | SUCCESS | ERROR | WARN
-            "symbol":  symbol,
-            "message": message,
-        })
+        _log_buffer.append(
+            {
+                "id": _log_seq,
+                "ts": datetime.now().isoformat(timespec="seconds"),
+                "level": level,  # INFO | SUCCESS | ERROR | WARN
+                "symbol": symbol,
+                "message": message,
+            }
+        )
     tag = {"INFO": "ℹ", "SUCCESS": "✓", "ERROR": "✗", "WARN": "⚠"}.get(level, "·")
     sym = f" [{symbol}]" if symbol else ""
     print(f"[scheduler]{sym} {tag} {message}")
@@ -56,6 +59,21 @@ def get_logs(limit: int = 200):
 # ── Symbol currently being refreshed ─────────────────────────────────────────
 _current_symbol: str = ""
 _refresh_lock = threading.Lock()
+
+# Per-symbol last-fetch outcome (guarded by _refresh_lock).
+# Shape: { "SYMBOL.NS": {"status": "ok"|"error", "message": str, "ts": ISO-8601} }
+_last_fetch_status: dict[str, dict] = {}
+
+
+def _record_fetch_status(symbol: str, status: str, message: str) -> None:
+    """Record the outcome of the most recent refresh for `symbol`."""
+    entry = {
+        "status": status,
+        "message": message,
+        "ts": datetime.now().isoformat(timespec="seconds"),
+    }
+    with _refresh_lock:
+        _last_fetch_status[symbol.upper()] = entry
 
 
 def refresh_one(symbol: str, name: str, sector: str, *, skip_if_fresh: bool = False):
@@ -79,13 +97,15 @@ def refresh_one(symbol: str, name: str, sector: str, *, skip_if_fresh: bool = Fa
     t0 = time.time()
     try:
         from data.analysis import load_config
-        cfg    = load_config()
+
+        cfg = load_config()
         period = cfg.get("history_period", "6mo")
 
         _log("INFO", f"Fetching {period} OHLCV history …", symbol)
         df = get_history(symbol, period=period)
         if df is None:
             _log("WARN", "No price history returned — skipping", symbol)
+            _record_fetch_status(symbol, "error", "No price history returned")
             return
         _log("INFO", f"Got {len(df)} candles", symbol)
 
@@ -94,30 +114,44 @@ def refresh_one(symbol: str, name: str, sector: str, *, skip_if_fresh: bool = Fa
 
         _log("INFO", "Fetching news …", symbol)
         news = get_news(symbol, name)
-        neg  = news.get("negative_score", 0)
-        _log("INFO", f"News: {news.get('headline_count', 0)} headlines, neg_score={neg:.2f}", symbol)
+        neg = news.get("negative_score", 0)
+        _log(
+            "INFO",
+            f"News: {news.get('headline_count', 0)} headlines, neg_score={neg:.2f}",
+            symbol,
+        )
 
         _log("INFO", "Fetching fundamentals …", symbol)
         fundamentals = get_fundamentals(symbol)
         pe = fundamentals.get("trailing_pe")
         _log("INFO", f"Fundamentals: PE={pe}", symbol)
 
-        result    = full_analysis(symbol, df, info, news, cfg=cfg, fundamentals=fundamentals)
+        result = full_analysis(
+            symbol, df, info, news, cfg=cfg, fundamentals=fundamentals
+        )
         result["sector"] = sector
 
-        sig     = result.get("signal", {})
-        val     = result.get("valuation", {})
+        sig = result.get("signal", {})
+        val = result.get("valuation", {})
         elapsed = time.time() - t0
-        _log("SUCCESS",
-             f"Signal={sig.get('signal','?')} ({sig.get('confidence','?')}%) "
-             f"| Valuation={val.get('status','?')} "
-             f"| Price={result.get('current_price','?')} "
-             f"| Done in {elapsed:.1f}s",
-             symbol)
+        _log(
+            "SUCCESS",
+            f"Signal={sig.get('signal','?')} ({sig.get('confidence','?')}%) "
+            f"| Valuation={val.get('status','?')} "
+            f"| Price={result.get('current_price','?')} "
+            f"| Done in {elapsed:.1f}s",
+            symbol,
+        )
         store.upsert(symbol, name, sector, result)
+        _record_fetch_status(
+            symbol,
+            "ok",
+            f"Signal={sig.get('signal','?')} ({sig.get('confidence','?')}%)",
+        )
 
     except Exception as e:
         _log("ERROR", f"{type(e).__name__}: {e}", symbol)
+        _record_fetch_status(symbol, "error", f"{type(e).__name__}: {e}")
     finally:
         with _refresh_lock:
             _current_symbol = ""
@@ -129,7 +163,7 @@ def refresh_all():
     _log("INFO", f"⟳ Starting full refresh — {len(stocks)} stocks")
     for s in stocks:
         symbol = s["symbol"]
-        name   = s.get("name", symbol)
+        name = s.get("name", symbol)
         sector = s.get("sector", "Other")
         refresh_one(symbol, name, sector, skip_if_fresh=False)
         delay = random.uniform(*INTER_STOCK_DELAY)
@@ -176,16 +210,20 @@ def status() -> dict:
         next_run = job.next_run_time.isoformat()
 
     staleness = store.get_staleness()
-    oldest   = max(staleness.values(), default=0) if staleness else 0
+    oldest = max(staleness.values(), default=0) if staleness else 0
     freshest = min(staleness.values(), default=0) if staleness else 0
 
+    with _refresh_lock:
+        last_fetch_status = dict(_last_fetch_status)
+
     return {
-        "running":               _scheduler.running,
-        "current_symbol":        current,
-        "next_run":              next_run,
-        "interval_minutes":      REFRESH_INTERVAL_MINUTES,
-        "total_cached":          len(staleness),
-        "oldest_data_age_sec":   oldest,
+        "running": _scheduler.running,
+        "current_symbol": current,
+        "next_run": next_run,
+        "interval_minutes": REFRESH_INTERVAL_MINUTES,
+        "total_cached": len(staleness),
+        "oldest_data_age_sec": oldest,
         "freshest_data_age_sec": freshest,
-        "per_symbol_age_sec":    staleness,
+        "per_symbol_age_sec": staleness,
+        "last_fetch_status": last_fetch_status,
     }
