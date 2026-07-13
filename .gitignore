@@ -9,5 +9,11 @@ __pycache__/
 node_modules/
 dist/
 .DS_Store
-stock_data.db
-*.db*
+
+# Runtime data / caches (seed with backend/seed_db.py; do not commit)
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
