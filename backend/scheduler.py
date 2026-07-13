@@ -10,6 +10,7 @@ Jobs:
 
 import random
 import time
+import queue
 import threading
 from collections import deque
 from datetime import datetime
@@ -74,6 +75,38 @@ def _record_fetch_status(symbol: str, status: str, message: str) -> None:
     }
     with _refresh_lock:
         _last_fetch_status[symbol.upper()] = entry
+
+
+# ── Single-worker refresh queue ──────────────────────────────────────────────
+#
+# All Playwright fetches funnel through ONE dedicated OS thread. The sync
+# Playwright API pins its greenlet event loop to whichever thread first called
+# sync_playwright().start(); any subsequent call from a different thread
+# raises "cannot switch to a different thread (which happens to have exited)".
+# Serializing here guarantees the browser singleton in fetcher._get_browser()
+# is always accessed from the same thread. See issue #005.
+#
+# Queue payload: (symbol, name, sector, skip_if_fresh) tuple, or None sentinel
+# to signal worker shutdown.
+_refresh_queue: "queue.Queue[tuple | None]" = queue.Queue()
+_refresh_worker: threading.Thread | None = None
+
+
+def _refresh_worker_loop():
+    """Consume jobs from `_refresh_queue` sequentially until a None sentinel arrives."""
+    while True:
+        item = _refresh_queue.get()
+        if item is None:
+            break
+        symbol, name, sector, skip_if_fresh = item
+        try:
+            _do_refresh_one(symbol, name, sector, skip_if_fresh=skip_if_fresh)
+        except Exception as e:
+            # A single bad job must never kill the worker.
+            _log("ERROR", f"Worker exception: {type(e).__name__}: {e}", symbol)
+        # Polite delay between fetches lives here (formerly in refresh_all),
+        # so both scheduled and ad-hoc refreshes are equally polite to upstream.
+        time.sleep(random.uniform(*INTER_STOCK_DELAY))
 
 
 def _do_refresh_one(symbol: str, name: str, sector: str, *, skip_if_fresh: bool = False):
@@ -158,22 +191,25 @@ def _do_refresh_one(symbol: str, name: str, sector: str, *, skip_if_fresh: bool 
 
 
 def refresh_one(symbol: str, name: str, sector: str, *, skip_if_fresh: bool = False):
-    """Shim preserved for API compatibility — see _do_refresh_one for the real work."""
-    return _do_refresh_one(symbol, name, sector, skip_if_fresh=skip_if_fresh)
+    """
+    Enqueue a refresh job for `symbol`. Returns immediately.
+
+    All Playwright work runs on the dedicated `_refresh_worker` thread so the
+    browser singleton stays pinned to one OS thread for its whole life — see
+    #005 for why cross-thread calls into sync Playwright are fatal.
+    """
+    _refresh_queue.put((symbol, name, sector, skip_if_fresh))
+    _log("INFO", f"Queued refresh for {symbol}", symbol)
 
 
 def refresh_all():
-    """Full pass — iterate every active watchlist stock one-by-one with a polite delay."""
+    """Enqueue every active watchlist stock. The worker processes them one-by-one."""
     stocks = store.watchlist_get_all()
-    _log("INFO", f"⟳ Starting full refresh — {len(stocks)} stocks")
     for s in stocks:
-        symbol = s["symbol"]
-        name = s.get("name", symbol)
-        sector = s.get("sector", "Other")
-        refresh_one(symbol, name, sector, skip_if_fresh=False)
-        delay = random.uniform(*INTER_STOCK_DELAY)
-        time.sleep(delay)
-    _log("INFO", "⟳ Full refresh complete")
+        _refresh_queue.put(
+            (s["symbol"], s.get("name", s["symbol"]), s.get("sector", "Other"), False)
+        )
+    _log("INFO", f"⟳ Queued {len(stocks)} stocks for refresh")
 
 
 # ── Singleton scheduler ───────────────────────────────────────────────────────
@@ -187,8 +223,17 @@ def start(run_now: bool = False):
     Auto-refresh is disabled — data is refreshed only on manual trigger
     or when a new stock is added via the API.
     """
+    global _refresh_worker
+
     _scheduler.start()
     _log("INFO", "Scheduler started — manual-refresh-only mode")
+
+    if _refresh_worker is None or not _refresh_worker.is_alive():
+        _refresh_worker = threading.Thread(
+            target=_refresh_worker_loop, name="refresh-worker", daemon=True
+        )
+        _refresh_worker.start()
+        _log("INFO", "Refresh worker started")
 
     if run_now:
         t = threading.Thread(target=refresh_all, name="initial-refresh", daemon=True)
@@ -196,7 +241,18 @@ def start(run_now: bool = False):
 
 
 def stop():
-    """Gracefully shut down the scheduler."""
+    """Gracefully shut down the worker and the scheduler."""
+    global _refresh_worker
+
+    # Signal the worker to drain and exit.
+    try:
+        _refresh_queue.put(None)
+        if _refresh_worker is not None:
+            _refresh_worker.join(timeout=2.0)
+    except Exception:
+        pass
+    _refresh_worker = None
+
     try:
         _scheduler.shutdown(wait=False)
         _log("INFO", "Scheduler stopped")
@@ -224,6 +280,7 @@ def status() -> dict:
     return {
         "running": _scheduler.running,
         "current_symbol": current,
+        "queued": _refresh_queue.qsize(),
         "next_run": next_run,
         "interval_minutes": REFRESH_INTERVAL_MINUTES,
         "total_cached": len(staleness),
