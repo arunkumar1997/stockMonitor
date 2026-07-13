@@ -5,10 +5,15 @@ Watchlist is now fully DB-driven — stocks.json is no longer used.
 A background APScheduler refreshes stocks one-by-one every 15 minutes.
 """
 
+import asyncio
+import json
+from datetime import datetime
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from pathlib import Path
+from sse_starlette.sse import EventSourceResponse
 
 import scheduler
 from data import store
@@ -229,6 +234,43 @@ def analyze_stock(symbol: str):
 def scheduler_status():
     """Return scheduler state: next run time, what's being fetched now, per-stock freshness."""
     return scheduler.status()
+
+
+@app.get("/api/scheduler/events")
+async def scheduler_events():
+    """
+    Server-sent events stream for scheduler + log activity.
+
+    Emits one `status_snapshot` immediately on connect (so the client
+    doesn't need a separate GET), followed by live `fetch_started`,
+    `fetch_finished`, and `log` events pushed by the worker thread.
+
+    The existing polling endpoints (`/api/scheduler/status`, `/api/logs`)
+    remain valid one-shot queries — see #007.
+    """
+    # Register the FastAPI event loop with the scheduler on first connect
+    # so `_emit()` on the worker thread can dispatch onto it via
+    # `call_soon_threadsafe`. Idempotent — safe on every request.
+    loop = asyncio.get_running_loop()
+    scheduler.set_event_loop(loop)
+    q = scheduler.subscribe()
+
+    async def _stream():
+        try:
+            snapshot = {
+                "type": "status_snapshot",
+                "ts": datetime.now().isoformat(timespec="seconds"),
+                "status": scheduler.status(),
+                "logs": scheduler.get_logs(limit=50),
+            }
+            yield {"event": "message", "data": json.dumps(snapshot)}
+            while True:
+                event = await q.get()
+                yield {"event": "message", "data": json.dumps(event)}
+        finally:
+            scheduler.unsubscribe(q)
+
+    return EventSourceResponse(_stream())
 
 
 @app.post("/api/scheduler/refresh/{symbol}")
