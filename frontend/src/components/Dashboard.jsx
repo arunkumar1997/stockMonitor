@@ -226,11 +226,15 @@ export default function Dashboard() {
     [filteredStocks]
   );
 
-  const signalCounts = stocks.reduce((acc, s) => {
-    const sig = s.signal?.signal || "WAIT";
-    acc[sig] = (acc[sig] || 0) + 1;
-    return acc;
-  }, {});
+  const signalCounts = useMemo(
+    () =>
+      stocks.reduce((acc, s) => {
+        const sig = s.signal?.signal || "WAIT";
+        acc[sig] = (acc[sig] || 0) + 1;
+        return acc;
+      }, {}),
+    [stocks]
+  );
 
   return (
     <Box sx={{ minHeight: "100vh", pb: 10 }}>
