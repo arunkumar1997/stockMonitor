@@ -1,21 +1,15 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import Typography from "@mui/material/Typography";
 
 /**
  * Small self-contained countdown display. Owns its own 1Hz tick so that the
  * parent tree does not re-render every second. When `lastUpdated` changes,
- * the countdown resets to `intervalSec`. When the countdown reaches zero,
- * `onExpire` (if provided) is invoked and the countdown resets.
+ * the countdown resets to `intervalSec`. When the countdown hits zero it
+ * wraps back to `intervalSec`; the actual data refresh is driven separately
+ * by the parent.
  */
-export default function CountdownBadge({ intervalSec, lastUpdated, onExpire }) {
+export default function CountdownBadge({ intervalSec, lastUpdated }) {
   const [remaining, setRemaining] = useState(intervalSec);
-
-  // Keep the latest onExpire in a ref so the tick effect doesn't need to
-  // re-subscribe every time the parent passes a new function reference.
-  const onExpireRef = useRef(onExpire);
-  useEffect(() => {
-    onExpireRef.current = onExpire;
-  }, [onExpire]);
 
   // Reset the visible countdown whenever a fresh update lands.
   useEffect(() => {
@@ -24,13 +18,7 @@ export default function CountdownBadge({ intervalSec, lastUpdated, onExpire }) {
 
   useEffect(() => {
     const tick = setInterval(() => {
-      setRemaining((prev) => {
-        if (prev <= 1) {
-          if (onExpireRef.current) onExpireRef.current();
-          return intervalSec;
-        }
-        return prev - 1;
-      });
+      setRemaining((prev) => (prev <= 1 ? intervalSec : prev - 1));
     }, 1000);
     return () => clearInterval(tick);
   }, [intervalSec]);

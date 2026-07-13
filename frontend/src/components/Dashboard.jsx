@@ -177,6 +177,14 @@ export default function Dashboard() {
 
   useEffect(() => { fetchDashboard(); }, [fetchDashboard]);
 
+  // Auto-refresh timer, independent of the visual countdown.
+  useEffect(() => {
+    const id = setInterval(() => {
+      fetchDashboard(true);
+    }, REFRESH_INTERVAL * 1000);
+    return () => clearInterval(id);
+  }, [fetchDashboard]);
+
   const handleAdd = async (symbol, name, sector) => {
     await addStock(symbol, name, sector);
     await fetchDashboard(true);
@@ -273,7 +281,6 @@ export default function Dashboard() {
             <CountdownBadge
               intervalSec={REFRESH_INTERVAL}
               lastUpdated={lastUpdated}
-              onExpire={() => fetchDashboard(true)}
             />
 
             {/* Refresh */}
