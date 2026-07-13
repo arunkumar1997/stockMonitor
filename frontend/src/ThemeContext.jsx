@@ -35,6 +35,20 @@ function buildTheme(mode) {
     },
     shape: { borderRadius: 16 },
     components: {
+      // Global keyframes, defined once on the CssBaseline so components can
+      // reference them via `sx={{ animation: 'spin 1s linear infinite' }}`
+      // without re-injecting the stylesheet rule on every render.
+      MuiCssBaseline: {
+        styleOverrides: {
+          "@keyframes spin": {
+            "100%": { transform: "rotate(360deg)" },
+          },
+          "@keyframes pulse": {
+            "0%,100%": { opacity: 1 },
+            "50%": { opacity: 0.5 },
+          },
+        },
+      },
       MuiCard: {
         styleOverrides: {
           root: {

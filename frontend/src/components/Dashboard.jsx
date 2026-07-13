@@ -254,7 +254,6 @@ export default function Dashboard() {
                   border: "1px solid rgba(0,180,216,0.3)",
                   fontWeight: 700, fontSize: "0.72rem",
                   animation: "pulse 1.4s ease-in-out infinite",
-                  "@keyframes pulse": { "0%,100%": { opacity: 1 }, "50%": { opacity: 0.5 } },
                 }}
               />
             )}

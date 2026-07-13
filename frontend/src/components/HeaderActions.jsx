@@ -64,7 +64,6 @@ function HeaderActions({
             color: "primary.main",
             border: "1px solid rgba(0,180,216,0.25)",
             animation: refreshing ? "spin 1s linear infinite" : "none",
-            "@keyframes spin": { "100%": { transform: "rotate(360deg)" } },
           }}
         >
           <RefreshIcon fontSize="small" />
