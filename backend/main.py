@@ -8,11 +8,10 @@ A background APScheduler refreshes stocks one-by-one every 15 minutes.
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import threading
+from pathlib import Path
 
 import scheduler
 from data import store
-from data import fetcher
 
 app = FastAPI(title="DipSense API", version="3.0.0")
 
@@ -29,42 +28,34 @@ app.add_middleware(
 
 # Set once at startup by startup_event() — surfaced via /health so ops can see
 # whether the Playwright Chromium binary is installed on this machine.
+#
+# NOTE: this used to actually launch a browser on a background thread. That was
+# the primary trigger of #005 — sync Playwright pins its greenlet loop to the
+# calling thread, and the check-thread exited immediately, poisoning the
+# browser singleton for every subsequent (different-thread) refresh. We now
+# just check the filesystem for the installed Chromium binary. The real
+# browser launch happens lazily on the refresh worker thread instead.
 _playwright_ok: bool = False
-
-
-def _playwright_launch_check():
-    """
-    Verify Playwright can actually launch a browser. Runs in a background
-    thread because fetcher uses the sync Playwright API, which refuses to
-    run inside an asyncio event loop (FastAPI's startup runs in one).
-    Result is surfaced via /health.
-    """
-    global _playwright_ok
-    try:
-        fetcher._get_browser()
-        _playwright_ok = True
-    except fetcher.PlaywrightBrowserMissingError as e:
-        _playwright_ok = False
-        print(
-            "⚠️  PLAYWRIGHT BROWSER MISSING — run: python -m playwright install chromium"
-        )
-        print(f"    ({e})")
-    except Exception as e:
-        # Any other launch failure — don't crash startup, just mark unhealthy.
-        _playwright_ok = False
-        print(f"⚠️  Playwright launch check failed: {type(e).__name__}: {e}")
 
 
 @app.on_event("startup")
 async def startup_event():
+    global _playwright_ok
     store.init_db()
 
-    # Kick off the Playwright launch check in a background thread so it doesn't
-    # collide with FastAPI's asyncio event loop. The /health endpoint stays
-    # cheap by reading the cached _playwright_ok flag.
-    threading.Thread(
-        target=_playwright_launch_check, name="playwright-check", daemon=True
-    ).start()
+    # Filesystem-only check: does the Playwright Chromium binary exist?
+    # Layout on this machine (Linux, playwright ~= v1.48):
+    #   ~/.cache/ms-playwright/chromium-<rev>/chrome-linux*/chrome
+    #   ~/.cache/ms-playwright/chromium_headless_shell-<rev>/chrome-headless-shell-linux*/chrome-headless-shell
+    cache = Path.home() / ".cache" / "ms-playwright"
+    candidates = list(cache.glob("chromium*/chrome-linux*/chrome")) + list(
+        cache.glob("chromium*/chrome-headless-shell-linux*/chrome-headless-shell")
+    )
+    _playwright_ok = any(p.exists() for p in candidates)
+    if not _playwright_ok:
+        print(
+            "⚠️  Playwright Chromium binary not found — run: python -m playwright install chromium"
+        )
 
     scheduler.start(run_now=False)  # no auto-refresh on start — use manual refresh
 
