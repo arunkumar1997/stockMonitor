@@ -18,7 +18,12 @@ import SignalBadge from "./SignalBadge";
 import Sparkline from "./Sparkline";
 import NewsPanel from "./NewsPanel";
 import ConfirmDialog from "./ConfirmDialog";
-import { forceRefresh } from "../api";
+import { forceRefresh, getSchedulerStatus } from "../api";
+
+// Poll cadence + safety timeout for the per-card refresh completion signal.
+// See docs/issues/006-per-card-refresh-real-completion.md.
+const REFRESH_POLL_MS = 2000;
+const REFRESH_TIMEOUT_MS = 60000;
 
 // ── Fundamental helpers ───────────────────────────────────────────────────────
 
@@ -201,16 +206,32 @@ function StockCard({ stock, onRemove }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const { enqueueSnackbar } = useSnackbar();
-  const spinTimerRef = useRef(null);
+  const pollIntervalRef = useRef(null);
+  const timeoutRef = useRef(null);
   const mountedRef = useRef(true);
+
+  const stopPolling = useCallback(() => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      if (spinTimerRef.current) {
-        clearTimeout(spinTimerRef.current);
-        spinTimerRef.current = null;
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
       }
     };
   }, []);
@@ -219,23 +240,79 @@ function StockCard({ stock, onRemove }) {
 
   const handleRefresh = useCallback(async () => {
     if (!symbol) return;
+
+    // The backend uppercases keys in last_fetch_status; match that here.
+    const key = symbol.toUpperCase();
+
+    // 1. Snapshot the current completion timestamp BEFORE kicking off the fetch
+    //    so we can detect a new completion by ts change.
+    let preTs = null;
+    try {
+      const snap = await getSchedulerStatus();
+      preTs = snap?.last_fetch_status?.[key]?.ts ?? null;
+    } catch {
+      // Snapshot failure is non-fatal — treat as null and proceed.
+      preTs = null;
+    }
+
+    if (!mountedRef.current) return;
     setIsRefreshing(true);
     enqueueSnackbar(`Refreshing ${symbol}…`, { variant: "info" });
+
+    // 2. Kick off the refresh. If the POST itself errors, the backend never
+    //    started work — clear the spinner immediately, no polling needed.
     try {
       await forceRefresh(symbol);
-      // Keep the spinner visible for a beat so the user gets clear feedback
-      // even when the backend responds almost instantly.
-      if (spinTimerRef.current) clearTimeout(spinTimerRef.current);
-      spinTimerRef.current = setTimeout(() => {
-        if (mountedRef.current) setIsRefreshing(false);
-        spinTimerRef.current = null;
-      }, 3000);
     } catch (err) {
       const msg = err?.response?.data?.detail || err?.message || "unknown error";
-      enqueueSnackbar(`Refresh failed: ${msg}`, { variant: "error" });
-      if (mountedRef.current) setIsRefreshing(false);
+      if (mountedRef.current) {
+        enqueueSnackbar(`Refresh failed: ${msg}`, { variant: "error" });
+        setIsRefreshing(false);
+      }
+      return;
     }
-  }, [symbol, enqueueSnackbar]);
+
+    if (!mountedRef.current) return;
+
+    // 3. Poll last_fetch_status[SYMBOL].ts until it changes (or we time out).
+    //    Clear any prior poller first — defensive, shouldn't happen while the
+    //    button is disabled but keeps state well-formed.
+    stopPolling();
+
+    pollIntervalRef.current = setInterval(async () => {
+      // Skip polling while the tab is backgrounded to avoid wasted requests.
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        return;
+      }
+      let entry;
+      try {
+        const status = await getSchedulerStatus();
+        entry = status?.last_fetch_status?.[key];
+      } catch {
+        // Transient network error — keep polling; the safety timeout is the
+        // ultimate backstop.
+        return;
+      }
+      if (!mountedRef.current) return;
+      if (!entry?.ts || entry.ts === preTs) return;
+
+      // ts changed → refresh completed (successfully or with an error).
+      stopPolling();
+      if (entry.status === "error" && mountedRef.current) {
+        enqueueSnackbar(`Refresh failed: ${entry.message}`, { variant: "error" });
+      }
+      if (mountedRef.current) setIsRefreshing(false);
+    }, REFRESH_POLL_MS);
+
+    // 4. Safety timeout — never leave the button permanently disabled.
+    timeoutRef.current = setTimeout(() => {
+      stopPolling();
+      if (mountedRef.current) {
+        enqueueSnackbar("Refresh timed out — try again", { variant: "warning" });
+        setIsRefreshing(false);
+      }
+    }, REFRESH_TIMEOUT_MS);
+  }, [symbol, enqueueSnackbar, stopPolling]);
 
   if (!stock) return null;
 
