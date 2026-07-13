@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import Drawer from "@mui/material/Drawer";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
@@ -12,6 +12,7 @@ import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
 import PauseIcon from "@mui/icons-material/Pause";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import { getLogs } from "../api";
+import { useSchedulerLogs } from "../hooks/useSchedulerEvents";
 
 // ── Styling helpers ───────────────────────────────────────────────────────────
 
@@ -84,29 +85,62 @@ function LogRow({ entry }) {
 }
 
 export default function LogsPanel({ open, onClose }) {
-  const [logs,       setLogs]       = useState([]);
-  const [paused,     setPaused]     = useState(false);
+  // Live log stream from the SSE provider. Newest-first, capped at 500.
+  const liveLogs = useSchedulerLogs();
+
+  // One-shot backfill: the provider's initial status_snapshot carries only
+  // the last 50 log entries. If the panel is opened right after page load
+  // (before any live events have arrived) it looked near-empty. Pull the
+  // fuller /api/logs?limit=200 once, and merge with anything the live feed
+  // has picked up. After that we're pure push.
+  const [backfill, setBackfill] = useState([]);
+  const backfilledRef = useRef(false);
+  useEffect(() => {
+    if (!open || backfilledRef.current) return;
+    backfilledRef.current = true;
+    (async () => {
+      try {
+        const data = await getLogs(200);
+        setBackfill(data);
+      } catch {
+        /* silently ignore — SSE stream will fill in as new events arrive */
+      }
+    })();
+  }, [open]);
+
+  // Merge live + backfill, dedup by id, newest first, cap at 500.
+  const mergedLogs = useMemo(() => {
+    if (backfill.length === 0) return liveLogs;
+    const seen = new Set(liveLogs.map((l) => l.id));
+    const merged = [...liveLogs, ...backfill.filter((d) => !seen.has(d.id))];
+    merged.sort((a, b) => b.id - a.id);
+    if (merged.length > 500) merged.length = 500;
+    return merged;
+  }, [liveLogs, backfill]);
+
+  // "Clear display" (doesn't delete from server). Records the current
+  // max id as a floor; only entries with id > floor are shown thereafter,
+  // so newly-arriving live entries still appear.
+  const [clearFloorId, setClearFloorId] = useState(0);
+  const visibleLogs = clearFloorId
+    ? mergedLogs.filter((l) => l.id > clearFloorId)
+    : mergedLogs;
+
+  // Pause: freeze the displayed snapshot so it doesn't scroll away while
+  // reading. Snapshot the currently-visible list at the moment pause
+  // flips on; drop the snapshot on resume.
+  const [paused, setPaused] = useState(false);
+  const [frozenLogs, setFrozenLogs] = useState(null);
+  useEffect(() => {
+    if (paused) setFrozenLogs(visibleLogs);
+    else setFrozenLogs(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paused]);
+  const logs = paused && frozenLogs ? frozenLogs : visibleLogs;
+
   const [autoScroll, setAutoScroll] = useState(true);
   const [filter,     setFilter]     = useState("ALL");  // ALL | SUCCESS | ERROR | WARN | INFO
   const bottomRef = useRef(null);
-  const lastIdRef = useRef(0);
-
-  const fetchLogs = useCallback(async () => {
-    if (paused) return;
-    try {
-      const data = await getLogs(300);
-      setLogs(data);
-      if (data.length > 0) lastIdRef.current = data[0].id;
-    } catch (_) { /* silently ignore */ }
-  }, [paused]);
-
-  // Poll every 2 seconds when open
-  useEffect(() => {
-    if (!open) return;
-    fetchLogs();
-    const interval = setInterval(fetchLogs, 2000);
-    return () => clearInterval(interval);
-  }, [open, fetchLogs]);
 
   // Auto-scroll to bottom when new entries arrive
   useEffect(() => {
@@ -169,7 +203,11 @@ export default function LogsPanel({ open, onClose }) {
             </IconButton>
           </Tooltip>
           <Tooltip title="Clear display (doesn't delete from server)">
-            <IconButton size="small" onClick={() => setLogs([])} sx={{ color: "text.secondary" }}>
+            <IconButton
+              size="small"
+              onClick={() => setClearFloorId(mergedLogs[0]?.id || 0)}
+              sx={{ color: "text.secondary" }}
+            >
               <DeleteSweepIcon fontSize="small" />
             </IconButton>
           </Tooltip>
@@ -261,7 +299,7 @@ export default function LogsPanel({ open, onClose }) {
           },
         }} />
         <Typography variant="caption" color="text.secondary">
-          {paused ? "Paused" : "Live — polling every 2s"}
+          {paused ? "Paused" : "Live \u2014 push over SSE"}
         </Typography>
         {filtered.length < logs.length && (
           <Typography variant="caption" color="text.disabled" sx={{ ml: "auto" }}>
