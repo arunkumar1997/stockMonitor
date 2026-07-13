@@ -194,7 +194,7 @@ function ResistanceMeter({ current, resistanceLevels, supportLevels, currency })
   );
 }
 
-export default function StockCard({ stock, onRemove }) {
+function StockCard({ stock, onRemove }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   if (!stock) return null;
@@ -365,3 +365,5 @@ export default function StockCard({ stock, onRemove }) {
     </>
   );
 }
+
+export default React.memo(StockCard);

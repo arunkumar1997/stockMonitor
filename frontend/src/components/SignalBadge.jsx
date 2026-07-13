@@ -65,7 +65,7 @@ const SIGNAL_CONFIG = {
   },
 };
 
-export default function SignalBadge({ signal, confidence, size = "medium" }) {
+function SignalBadge({ signal, confidence, size = "medium" }) {
   const cfg = SIGNAL_CONFIG[signal] || SIGNAL_CONFIG.WAIT;
   return (
     <Chip
@@ -76,4 +76,6 @@ export default function SignalBadge({ signal, confidence, size = "medium" }) {
     />
   );
 }
+
+export default React.memo(SignalBadge);
 

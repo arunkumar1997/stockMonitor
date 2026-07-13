@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from "react";
+import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import Grid from "@mui/material/Grid";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
@@ -13,25 +13,19 @@ import TextField from "@mui/material/TextField";
 import InputAdornment from "@mui/material/InputAdornment";
 import Collapse from "@mui/material/Collapse";
 import AddIcon from "@mui/icons-material/Add";
-import RefreshIcon from "@mui/icons-material/Refresh";
 import ShowChartIcon from "@mui/icons-material/ShowChart";
 import SearchIcon from "@mui/icons-material/Search";
 import ClearIcon from "@mui/icons-material/Clear";
-import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
-import DarkModeIcon from "@mui/icons-material/DarkMode";
-import LightModeIcon from "@mui/icons-material/LightMode";
-import BrightnessAutoIcon from "@mui/icons-material/BrightnessAuto";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
-import SettingsIcon from "@mui/icons-material/Settings";
-import ArticleIcon from "@mui/icons-material/Article";
 import StockCard from "./StockCard";
 import AddStockModal from "./AddStockModal";
 import TrashPage from "./TrashPage";
 import SettingsPage from "./SettingsPage";
 import LogsPanel from "./LogsPanel";
+import CountdownBadge from "./CountdownBadge";
+import HeaderActions from "./HeaderActions";
 import { getDashboard, addStock, removeStock, getSchedulerStatus } from "../api";
-import { useThemeMode } from "../ThemeContext";
 import { useSnackbar } from "notistack";
 
 const REFRESH_INTERVAL = 300;
@@ -53,24 +47,6 @@ const SIGNAL_COLORS = {
   WAIT: "#ffd740", AVOID: "#ff5252", HOLD: "#ffd740",
 };
 
-function ThemeToggle() {
-  const { themeMode, setThemeMode } = useThemeMode();
-  const cycle = () => {
-    if (themeMode === "dark") setThemeMode("light");
-    else if (themeMode === "light") setThemeMode("auto");
-    else setThemeMode("dark");
-  };
-  const Icon = themeMode === "dark" ? DarkModeIcon : themeMode === "light" ? LightModeIcon : BrightnessAutoIcon;
-  const label = themeMode === "dark" ? "Dark mode" : themeMode === "light" ? "Light mode" : "Auto (system)";
-  return (
-    <Tooltip title={label}>
-      <IconButton onClick={cycle} size="small" sx={{ color: "primary.main", border: "1px solid rgba(0,180,216,0.25)" }}>
-        <Icon fontSize="small" />
-      </IconButton>
-    </Tooltip>
-  );
-}
-
 function CardSkeleton() {
   return (
     <Box sx={{ borderRadius: 4, overflow: "hidden", border: "1px solid rgba(0,180,216,0.1)", p: 2.5 }}>
@@ -90,10 +66,25 @@ function CardSkeleton() {
 }
 
 function SectorSection({ sector, sectorStocks, onRemove, collapsed, onToggleCollapse }) {
+  const signalCounts = useMemo(
+    () =>
+      sectorStocks.reduce((a, s) => {
+        const sig = s.signal?.signal || "WAIT";
+        a[sig] = (a[sig] || 0) + 1;
+        return a;
+      }, {}),
+    [sectorStocks]
+  );
+
+  const handleToggle = useCallback(
+    () => onToggleCollapse(sector),
+    [onToggleCollapse, sector]
+  );
+
   return (
     <Box sx={{ mb: 5 }}>
       {/* Sector header */}
-      <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 2, cursor: "pointer" }} onClick={onToggleCollapse}>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 2, cursor: "pointer" }} onClick={handleToggle}>
         <IconButton size="small" sx={{ color: "text.secondary", p: 0.25 }}>
           {collapsed ? <ExpandMoreIcon fontSize="small" /> : <ExpandLessIcon fontSize="small" />}
         </IconButton>
@@ -104,13 +95,7 @@ function SectorSection({ sector, sectorStocks, onRemove, collapsed, onToggleColl
           background: "rgba(0,180,216,0.1)", color: "primary.main",
           border: "1px solid rgba(0,180,216,0.2)", fontWeight: 600, fontSize: "0.7rem",
         }} />
-        {Object.entries(
-          sectorStocks.reduce((a, s) => {
-            const sig = s.signal?.signal || "WAIT";
-            a[sig] = (a[sig] || 0) + 1;
-            return a;
-          }, {})
-        ).map(([sig, cnt]) => (
+        {Object.entries(signalCounts).map(([sig, cnt]) => (
           <Chip key={sig} label={`${sig} ×${cnt}`} size="small" sx={{
             color: SIGNAL_COLORS[sig] || "#90a4ae",
             border: `1px solid ${SIGNAL_COLORS[sig] || "#90a4ae"}30`,
@@ -133,6 +118,8 @@ function SectorSection({ sector, sectorStocks, onRemove, collapsed, onToggleColl
   );
 }
 
+const MemoSectorSection = React.memo(SectorSection);
+
 export default function Dashboard() {
   const [stocks, setStocks] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -141,7 +128,6 @@ export default function Dashboard() {
   const [trashOpen,    setTrashOpen]    = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [logsOpen,     setLogsOpen]     = useState(false);
-  const [countdown, setCountdown] = useState(REFRESH_INTERVAL);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [schedulerStatus, setSchedulerStatus] = useState(null);
@@ -167,7 +153,6 @@ export default function Dashboard() {
       setStocks(data);
       setSchedulerStatus(status);
       setLastUpdated(new Date());
-      setCountdown(REFRESH_INTERVAL);
     } catch {
       setError("Cannot connect to backend. Make sure the Python server is running on port 8000.");
     } finally {
@@ -178,15 +163,19 @@ export default function Dashboard() {
 
   useEffect(() => { fetchDashboard(); }, [fetchDashboard]);
 
+  // Auto-refresh timer, independent of the visual countdown.
   useEffect(() => {
-    const tick = setInterval(() => {
-      setCountdown((prev) => {
-        if (prev <= 1) { fetchDashboard(true); return REFRESH_INTERVAL; }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => clearInterval(tick);
+    const id = setInterval(() => {
+      fetchDashboard(true);
+    }, REFRESH_INTERVAL * 1000);
+    return () => clearInterval(id);
   }, [fetchDashboard]);
+
+  // Stable handlers for HeaderActions so React.memo can bail out cleanly.
+  const handleRefresh = useCallback(() => fetchDashboard(true), [fetchDashboard]);
+  const handleOpenTrash = useCallback(() => setTrashOpen(true), []);
+  const handleOpenLogs = useCallback(() => setLogsOpen(true), []);
+  const handleOpenSettings = useCallback(() => setSettingsOpen(true), []);
 
   const handleAdd = async (symbol, name, sector) => {
     await addStock(symbol, name, sector);
@@ -194,41 +183,58 @@ export default function Dashboard() {
     enqueueSnackbar(`${symbol} added to watchlist`, { variant: "success" });
   };
 
-  const handleRemove = async (symbol) => {
-    await removeStock(symbol);
-    setStocks((prev) => prev.filter((s) => s.symbol !== symbol));
-    enqueueSnackbar(`${symbol} moved to Trash`, { variant: "info" });
-  };
+  const handleRemove = useCallback(
+    async (symbol) => {
+      await removeStock(symbol);
+      setStocks((prev) => prev.filter((s) => s.symbol !== symbol));
+      enqueueSnackbar(`${symbol} moved to Trash`, { variant: "info" });
+    },
+    [enqueueSnackbar]
+  );
 
-  const toggleSectorCollapse = (sector) => {
+  const toggleSectorCollapse = useCallback((sector) => {
     setCollapsedSectors((prev) => {
       const next = { ...prev, [sector]: !prev[sector] };
       localStorage.setItem("collapsedSectors", JSON.stringify(next));
       return next;
     });
-  };
+  }, []);
 
   // Search filtering
   const q = searchQuery.trim().toLowerCase();
-  const filteredStocks = q
-    ? stocks.filter((s) =>
-        s.symbol.toLowerCase().includes(q) || (s.name || "").toLowerCase().includes(q)
-      )
-    : stocks;
+  const filteredStocks = useMemo(
+    () =>
+      q
+        ? stocks.filter(
+            (s) =>
+              s.symbol.toLowerCase().includes(q) ||
+              (s.name || "").toLowerCase().includes(q)
+          )
+        : stocks,
+    [stocks, q]
+  );
 
   // Group by sector
-  const grouped = filteredStocks.reduce((acc, stock) => {
-    const sector = stock.sector || "Other";
-    if (!acc[sector]) acc[sector] = [];
-    acc[sector].push(stock);
-    return acc;
-  }, {});
+  const grouped = useMemo(
+    () =>
+      filteredStocks.reduce((acc, stock) => {
+        const sector = stock.sector || "Other";
+        if (!acc[sector]) acc[sector] = [];
+        acc[sector].push(stock);
+        return acc;
+      }, {}),
+    [filteredStocks]
+  );
 
-  const signalCounts = stocks.reduce((acc, s) => {
-    const sig = s.signal?.signal || "WAIT";
-    acc[sig] = (acc[sig] || 0) + 1;
-    return acc;
-  }, {});
+  const signalCounts = useMemo(
+    () =>
+      stocks.reduce((acc, s) => {
+        const sig = s.signal?.signal || "WAIT";
+        acc[sig] = (acc[sig] || 0) + 1;
+        return acc;
+      }, {}),
+    [stocks]
+  );
 
   return (
     <Box sx={{ minHeight: "100vh", pb: 10 }}>
@@ -276,51 +282,22 @@ export default function Dashboard() {
                   border: "1px solid rgba(0,180,216,0.3)",
                   fontWeight: 700, fontSize: "0.72rem",
                   animation: "pulse 1.4s ease-in-out infinite",
-                  "@keyframes pulse": { "0%,100%": { opacity: 1 }, "50%": { opacity: 0.5 } },
                 }}
               />
             )}
 
-            {lastUpdated && (
-              <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
-                Updated {lastUpdated.toLocaleTimeString()} · {countdown}s
-              </Typography>
-            )}
+            <CountdownBadge
+              intervalSec={REFRESH_INTERVAL}
+              lastUpdated={lastUpdated}
+            />
 
-            {/* Refresh */}
-            <Tooltip title="Refresh now">
-              <IconButton onClick={() => fetchDashboard(true)} disabled={refreshing} size="small" sx={{
-                color: "primary.main", border: "1px solid rgba(0,180,216,0.25)",
-                animation: refreshing ? "spin 1s linear infinite" : "none",
-                "@keyframes spin": { "100%": { transform: "rotate(360deg)" } },
-              }}>
-                <RefreshIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-
-            {/* Trash */}
-            <Tooltip title="Trash (deleted stocks)">
-              <IconButton onClick={() => setTrashOpen(true)} size="small" sx={{ color: "error.main", border: "1px solid rgba(255,82,82,0.25)" }}>
-                <DeleteSweepIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-
-            {/* Logs */}
-            <Tooltip title="Refresh Logs">
-              <IconButton onClick={() => setLogsOpen(true)} size="small" sx={{ color: "text.secondary", border: "1px solid rgba(128,128,128,0.25)" }}>
-                <ArticleIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-
-            {/* Settings */}
-            <Tooltip title="Settings">
-              <IconButton onClick={() => setSettingsOpen(true)} size="small" sx={{ color: "text.secondary", border: "1px solid rgba(128,128,128,0.25)" }}>
-                <SettingsIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-
-            {/* Theme toggle */}
-            <ThemeToggle />
+            <HeaderActions
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              onOpenTrash={handleOpenTrash}
+              onOpenLogs={handleOpenLogs}
+              onOpenSettings={handleOpenSettings}
+            />
           </Box>
         </Box>
 
@@ -369,13 +346,13 @@ export default function Dashboard() {
           </Grid>
         ) : (
           Object.entries(grouped).map(([sector, sectorStocks]) => (
-            <SectorSection
+            <MemoSectorSection
               key={sector}
               sector={sector}
               sectorStocks={sectorStocks}
               onRemove={handleRemove}
               collapsed={!!collapsedSectors[sector]}
-              onToggleCollapse={() => toggleSectorCollapse(sector)}
+              onToggleCollapse={toggleSectorCollapse}
             />
           ))
         )}
