@@ -25,8 +25,9 @@ import SettingsPage from "./SettingsPage";
 import LogsPanel from "./LogsPanel";
 import CountdownBadge from "./CountdownBadge";
 import HeaderActions from "./HeaderActions";
-import { getDashboard, addStock, removeStock, getSchedulerStatus } from "../api";
+import { getDashboard, addStock, removeStock } from "../api";
 import { useSnackbar } from "notistack";
+import { useSchedulerStatus } from "../hooks/useSchedulerEvents";
 
 const REFRESH_INTERVAL = 300;
 
@@ -130,7 +131,9 @@ export default function Dashboard() {
   const [logsOpen,     setLogsOpen]     = useState(false);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [schedulerStatus, setSchedulerStatus] = useState(null);
+  // Scheduler live status now streams over SSE via SchedulerEventsProvider;
+  // no more per-Dashboard poll (see #007).
+  const schedulerStatus = useSchedulerStatus();
   const [searchQuery, setSearchQuery] = useState("");
   const [collapsedSectors, setCollapsedSectors] = useState(() => {
     try {
@@ -146,12 +149,8 @@ export default function Dashboard() {
     else setLoading(true);
     setError("");
     try {
-      const [data, status] = await Promise.all([
-        getDashboard(),
-        getSchedulerStatus().catch(() => null),
-      ]);
+      const data = await getDashboard();
       setStocks(data);
-      setSchedulerStatus(status);
       setLastUpdated(new Date());
     } catch {
       setError("Cannot connect to backend. Make sure the Python server is running on port 8000.");
