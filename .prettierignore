@@ -1,0 +1,28 @@
+# Deps / builds
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# Backend runtime / caches
+backend/venv/
+backend/__pycache__/
+**/__pycache__/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# QA scratch (regenerable, not formatted)
+docs/qa/screenshots/
+docs/qa/**/*trace*.json
+docs/qa/*-perf-raw.json
+docs/qa/*-console.log
+
+# Lock files
+package-lock.json
+
+# Generated
+*.min.js
+*.min.css

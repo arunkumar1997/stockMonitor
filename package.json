@@ -1,0 +1,15 @@
+{
+  "name": "stockmonitor-tooling",
+  "private": true,
+  "description": "Repo-root dev tooling (husky + lint-staged + prettier). Not shipped or run in production.",
+  "scripts": {
+    "prepare": "husky",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^15.2.10",
+    "prettier": "^3.4.2"
+  }
+}
