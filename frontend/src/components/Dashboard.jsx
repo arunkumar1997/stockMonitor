@@ -13,26 +13,19 @@ import TextField from "@mui/material/TextField";
 import InputAdornment from "@mui/material/InputAdornment";
 import Collapse from "@mui/material/Collapse";
 import AddIcon from "@mui/icons-material/Add";
-import RefreshIcon from "@mui/icons-material/Refresh";
 import ShowChartIcon from "@mui/icons-material/ShowChart";
 import SearchIcon from "@mui/icons-material/Search";
 import ClearIcon from "@mui/icons-material/Clear";
-import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
-import DarkModeIcon from "@mui/icons-material/DarkMode";
-import LightModeIcon from "@mui/icons-material/LightMode";
-import BrightnessAutoIcon from "@mui/icons-material/BrightnessAuto";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
-import SettingsIcon from "@mui/icons-material/Settings";
-import ArticleIcon from "@mui/icons-material/Article";
 import StockCard from "./StockCard";
 import AddStockModal from "./AddStockModal";
 import TrashPage from "./TrashPage";
 import SettingsPage from "./SettingsPage";
 import LogsPanel from "./LogsPanel";
 import CountdownBadge from "./CountdownBadge";
+import HeaderActions from "./HeaderActions";
 import { getDashboard, addStock, removeStock, getSchedulerStatus } from "../api";
-import { useThemeMode } from "../ThemeContext";
 import { useSnackbar } from "notistack";
 
 const REFRESH_INTERVAL = 300;
@@ -53,24 +46,6 @@ const SIGNAL_COLORS = {
   BUY: "#00e676", "BUY SMALL": "#69f0ae",
   WAIT: "#ffd740", AVOID: "#ff5252", HOLD: "#ffd740",
 };
-
-function ThemeToggle() {
-  const { themeMode, setThemeMode } = useThemeMode();
-  const cycle = () => {
-    if (themeMode === "dark") setThemeMode("light");
-    else if (themeMode === "light") setThemeMode("auto");
-    else setThemeMode("dark");
-  };
-  const Icon = themeMode === "dark" ? DarkModeIcon : themeMode === "light" ? LightModeIcon : BrightnessAutoIcon;
-  const label = themeMode === "dark" ? "Dark mode" : themeMode === "light" ? "Light mode" : "Auto (system)";
-  return (
-    <Tooltip title={label}>
-      <IconButton onClick={cycle} size="small" sx={{ color: "primary.main", border: "1px solid rgba(0,180,216,0.25)" }}>
-        <Icon fontSize="small" />
-      </IconButton>
-    </Tooltip>
-  );
-}
 
 function CardSkeleton() {
   return (
@@ -185,6 +160,12 @@ export default function Dashboard() {
     return () => clearInterval(id);
   }, [fetchDashboard]);
 
+  // Stable handlers for HeaderActions so React.memo can bail out cleanly.
+  const handleRefresh = useCallback(() => fetchDashboard(true), [fetchDashboard]);
+  const handleOpenTrash = useCallback(() => setTrashOpen(true), []);
+  const handleOpenLogs = useCallback(() => setLogsOpen(true), []);
+  const handleOpenSettings = useCallback(() => setSettingsOpen(true), []);
+
   const handleAdd = async (symbol, name, sector) => {
     await addStock(symbol, name, sector);
     await fetchDashboard(true);
@@ -283,40 +264,13 @@ export default function Dashboard() {
               lastUpdated={lastUpdated}
             />
 
-            {/* Refresh */}
-            <Tooltip title="Refresh now">
-              <IconButton onClick={() => fetchDashboard(true)} disabled={refreshing} size="small" sx={{
-                color: "primary.main", border: "1px solid rgba(0,180,216,0.25)",
-                animation: refreshing ? "spin 1s linear infinite" : "none",
-                "@keyframes spin": { "100%": { transform: "rotate(360deg)" } },
-              }}>
-                <RefreshIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-
-            {/* Trash */}
-            <Tooltip title="Trash (deleted stocks)">
-              <IconButton onClick={() => setTrashOpen(true)} size="small" sx={{ color: "error.main", border: "1px solid rgba(255,82,82,0.25)" }}>
-                <DeleteSweepIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-
-            {/* Logs */}
-            <Tooltip title="Refresh Logs">
-              <IconButton onClick={() => setLogsOpen(true)} size="small" sx={{ color: "text.secondary", border: "1px solid rgba(128,128,128,0.25)" }}>
-                <ArticleIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-
-            {/* Settings */}
-            <Tooltip title="Settings">
-              <IconButton onClick={() => setSettingsOpen(true)} size="small" sx={{ color: "text.secondary", border: "1px solid rgba(128,128,128,0.25)" }}>
-                <SettingsIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-
-            {/* Theme toggle */}
-            <ThemeToggle />
+            <HeaderActions
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              onOpenTrash={handleOpenTrash}
+              onOpenLogs={handleOpenLogs}
+              onOpenSettings={handleOpenSettings}
+            />
           </Box>
         </Box>
 
