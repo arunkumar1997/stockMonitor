@@ -8,6 +8,7 @@ Jobs:
   refresh_one  — on-demand (called when a new stock is added)
 """
 
+import asyncio
 import random
 import time
 import queue
@@ -31,23 +32,91 @@ _log_lock = threading.Lock()
 _log_seq = 0  # monotonic counter
 
 
+# ── SSE event bus ─────────────────────────────────────────────────────────────
+#
+# Bridges the scheduler worker thread → FastAPI asyncio subscribers.
+#
+# The worker runs on a plain `threading.Thread` (see `_refresh_worker_loop`),
+# while SSE subscribers own their own `asyncio.Queue` living on the FastAPI
+# event loop. Crossing that boundary requires `loop.call_soon_threadsafe`.
+#
+# The event loop reference is captured lazily by the SSE endpoint on first
+# connect via `set_event_loop(loop)` (idempotent). Before any subscribers
+# exist, `_emit` is a silent no-op — nobody is listening.
+#
+# All mutations of `_subscribers` are guarded by `_subscribers_lock`.
+# `_emit` snapshots the subscriber list under the lock, then releases it
+# before dispatching — the actual `put_nowait` runs on the event loop.
+_subscribers: list[asyncio.Queue] = []
+_subscribers_lock = threading.Lock()
+_event_loop: asyncio.AbstractEventLoop | None = None
+
+
+def set_event_loop(loop: asyncio.AbstractEventLoop) -> None:
+    """Register the FastAPI event loop. Idempotent — safe to call per request."""
+    global _event_loop
+    _event_loop = loop
+
+
+def subscribe() -> asyncio.Queue:
+    """Create + register a new subscriber queue. Caller MUST unsubscribe on close."""
+    q: asyncio.Queue = asyncio.Queue()
+    with _subscribers_lock:
+        _subscribers.append(q)
+    return q
+
+
+def unsubscribe(q: asyncio.Queue) -> None:
+    """Remove `q` from the subscriber list. Safe if already removed."""
+    with _subscribers_lock:
+        try:
+            _subscribers.remove(q)
+        except ValueError:
+            pass
+
+
+def _emit(event: dict) -> None:
+    """
+    Fan out `event` to every subscriber queue.
+
+    Callable from ANY thread — the actual `put_nowait` is dispatched onto the
+    FastAPI event loop via `call_soon_threadsafe`. If no loop has been
+    registered yet, silently drop (nobody could consume anyway).
+    """
+    loop = _event_loop
+    if loop is None:
+        return
+    with _subscribers_lock:
+        subs = list(_subscribers)
+    for q in subs:
+        try:
+            loop.call_soon_threadsafe(q.put_nowait, event)
+        except Exception:
+            # Queue may have been closed by a disconnecting client, or the
+            # loop may be shutting down. Either way, drop the event for this
+            # subscriber and keep going.
+            pass
+
+
 def _log(level: str, message: str, symbol: str = ""):
     """Append a structured log entry to the in-memory buffer."""
     global _log_seq
     with _log_lock:
         _log_seq += 1
-        _log_buffer.append(
-            {
-                "id": _log_seq,
-                "ts": datetime.now().isoformat(timespec="seconds"),
-                "level": level,  # INFO | SUCCESS | ERROR | WARN
-                "symbol": symbol,
-                "message": message,
-            }
-        )
+        entry = {
+            "id": _log_seq,
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "level": level,  # INFO | SUCCESS | ERROR | WARN
+            "symbol": symbol,
+            "message": message,
+        }
+        _log_buffer.append(entry)
     tag = {"INFO": "ℹ", "SUCCESS": "✓", "ERROR": "✗", "WARN": "⚠"}.get(level, "·")
     sym = f" [{symbol}]" if symbol else ""
     print(f"[scheduler]{sym} {tag} {message}")
+    # Fan out to SSE subscribers. `_emit` is O(subscribers) with a lockless
+    # snapshot — cheap enough to do on every log line.
+    _emit({"type": "log", **entry})
 
 
 def get_logs(limit: int = 200):
@@ -126,6 +195,15 @@ def _do_refresh_one(symbol: str, name: str, sector: str, *, skip_if_fresh: bool 
     with _refresh_lock:
         _current_symbol = symbol
 
+    _emit(
+        {
+            "type": "fetch_started",
+            "symbol": symbol.upper(),
+            "queued": _refresh_queue.qsize(),
+            "ts": datetime.now().isoformat(timespec="seconds"),
+        }
+    )
+
     _log("INFO", "Starting refresh …", symbol)
     t0 = time.time()
     try:
@@ -139,6 +217,16 @@ def _do_refresh_one(symbol: str, name: str, sector: str, *, skip_if_fresh: bool 
         if df is None:
             _log("WARN", "No price history returned — skipping", symbol)
             _record_fetch_status(symbol, "error", "No price history returned")
+            _emit(
+                {
+                    "type": "fetch_finished",
+                    "symbol": symbol.upper(),
+                    "status": "error",
+                    "message": "No price history returned",
+                    "ts": datetime.now().isoformat(timespec="seconds"),
+                    "queued": _refresh_queue.qsize(),
+                }
+            )
             return
         _log("INFO", f"Got {len(df)} candles", symbol)
 
@@ -176,15 +264,33 @@ def _do_refresh_one(symbol: str, name: str, sector: str, *, skip_if_fresh: bool 
             symbol,
         )
         store.upsert(symbol, name, sector, result)
-        _record_fetch_status(
-            symbol,
-            "ok",
-            f"Signal={sig.get('signal','?')} ({sig.get('confidence','?')}%)",
+        ok_msg = f"Signal={sig.get('signal','?')} ({sig.get('confidence','?')}%)"
+        _record_fetch_status(symbol, "ok", ok_msg)
+        _emit(
+            {
+                "type": "fetch_finished",
+                "symbol": symbol.upper(),
+                "status": "ok",
+                "message": ok_msg,
+                "ts": datetime.now().isoformat(timespec="seconds"),
+                "queued": _refresh_queue.qsize(),
+            }
         )
 
     except Exception as e:
-        _log("ERROR", f"{type(e).__name__}: {e}", symbol)
-        _record_fetch_status(symbol, "error", f"{type(e).__name__}: {e}")
+        err_msg = f"{type(e).__name__}: {e}"
+        _log("ERROR", err_msg, symbol)
+        _record_fetch_status(symbol, "error", err_msg)
+        _emit(
+            {
+                "type": "fetch_finished",
+                "symbol": symbol.upper(),
+                "status": "error",
+                "message": err_msg,
+                "ts": datetime.now().isoformat(timespec="seconds"),
+                "queued": _refresh_queue.qsize(),
+            }
+        )
     finally:
         with _refresh_lock:
             _current_symbol = ""
