@@ -30,6 +30,7 @@ import AddStockModal from "./AddStockModal";
 import TrashPage from "./TrashPage";
 import SettingsPage from "./SettingsPage";
 import LogsPanel from "./LogsPanel";
+import CountdownBadge from "./CountdownBadge";
 import { getDashboard, addStock, removeStock, getSchedulerStatus } from "../api";
 import { useThemeMode } from "../ThemeContext";
 import { useSnackbar } from "notistack";
@@ -141,7 +142,6 @@ export default function Dashboard() {
   const [trashOpen,    setTrashOpen]    = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [logsOpen,     setLogsOpen]     = useState(false);
-  const [countdown, setCountdown] = useState(REFRESH_INTERVAL);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [schedulerStatus, setSchedulerStatus] = useState(null);
@@ -167,7 +167,6 @@ export default function Dashboard() {
       setStocks(data);
       setSchedulerStatus(status);
       setLastUpdated(new Date());
-      setCountdown(REFRESH_INTERVAL);
     } catch {
       setError("Cannot connect to backend. Make sure the Python server is running on port 8000.");
     } finally {
@@ -177,16 +176,6 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => { fetchDashboard(); }, [fetchDashboard]);
-
-  useEffect(() => {
-    const tick = setInterval(() => {
-      setCountdown((prev) => {
-        if (prev <= 1) { fetchDashboard(true); return REFRESH_INTERVAL; }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => clearInterval(tick);
-  }, [fetchDashboard]);
 
   const handleAdd = async (symbol, name, sector) => {
     await addStock(symbol, name, sector);
@@ -281,11 +270,11 @@ export default function Dashboard() {
               />
             )}
 
-            {lastUpdated && (
-              <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
-                Updated {lastUpdated.toLocaleTimeString()} · {countdown}s
-              </Typography>
-            )}
+            <CountdownBadge
+              intervalSec={REFRESH_INTERVAL}
+              lastUpdated={lastUpdated}
+              onExpire={() => fetchDashboard(true)}
+            />
 
             {/* Refresh */}
             <Tooltip title="Refresh now">
