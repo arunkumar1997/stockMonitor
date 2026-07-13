@@ -76,7 +76,7 @@ def _record_fetch_status(symbol: str, status: str, message: str) -> None:
         _last_fetch_status[symbol.upper()] = entry
 
 
-def refresh_one(symbol: str, name: str, sector: str, *, skip_if_fresh: bool = False):
+def _do_refresh_one(symbol: str, name: str, sector: str, *, skip_if_fresh: bool = False):
     """
     Fetch + analyse a single stock and persist to SQLite.
     Called by the scheduler loop and also directly for new stocks.
@@ -155,6 +155,11 @@ def refresh_one(symbol: str, name: str, sector: str, *, skip_if_fresh: bool = Fa
     finally:
         with _refresh_lock:
             _current_symbol = ""
+
+
+def refresh_one(symbol: str, name: str, sector: str, *, skip_if_fresh: bool = False):
+    """Shim preserved for API compatibility — see _do_refresh_one for the real work."""
+    return _do_refresh_one(symbol, name, sector, skip_if_fresh=skip_if_fresh)
 
 
 def refresh_all():
