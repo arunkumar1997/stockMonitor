@@ -17,3 +17,8 @@ dist/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+
+# QA scratch — regenerable via docs/qa/_playthrough_*.py; don't commit
+docs/qa/screenshots/
+docs/qa/**/*trace*.json
+docs/qa/*-perf-raw.json
