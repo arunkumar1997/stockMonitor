@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 import Card from "@mui/material/Card";
 import CardContent from "@mui/material/CardContent";
 import Box from "@mui/material/Box";
@@ -9,13 +9,16 @@ import Tooltip from "@mui/material/Tooltip";
 import IconButton from "@mui/material/IconButton";
 import Divider from "@mui/material/Divider";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import RefreshIcon from "@mui/icons-material/Refresh";
 import TrendingUpIcon from "@mui/icons-material/TrendingUp";
 import TrendingDownIcon from "@mui/icons-material/TrendingDown";
 import ShowChartIcon from "@mui/icons-material/ShowChart";
+import { useSnackbar } from "notistack";
 import SignalBadge from "./SignalBadge";
 import Sparkline from "./Sparkline";
 import NewsPanel from "./NewsPanel";
 import ConfirmDialog from "./ConfirmDialog";
+import { forceRefresh } from "../api";
 
 // ── Fundamental helpers ───────────────────────────────────────────────────────
 
@@ -196,6 +199,43 @@ function ResistanceMeter({ current, resistanceLevels, supportLevels, currency })
 
 function StockCard({ stock, onRemove }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const { enqueueSnackbar } = useSnackbar();
+  const spinTimerRef = useRef(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (spinTimerRef.current) {
+        clearTimeout(spinTimerRef.current);
+        spinTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  const symbol = stock?.symbol;
+
+  const handleRefresh = useCallback(async () => {
+    if (!symbol) return;
+    setIsRefreshing(true);
+    enqueueSnackbar(`Refreshing ${symbol}…`, { variant: "info" });
+    try {
+      await forceRefresh(symbol);
+      // Keep the spinner visible for a beat so the user gets clear feedback
+      // even when the backend responds almost instantly.
+      if (spinTimerRef.current) clearTimeout(spinTimerRef.current);
+      spinTimerRef.current = setTimeout(() => {
+        if (mountedRef.current) setIsRefreshing(false);
+        spinTimerRef.current = null;
+      }, 3000);
+    } catch (err) {
+      const msg = err?.response?.data?.detail || err?.message || "unknown error";
+      enqueueSnackbar(`Refresh failed: ${msg}`, { variant: "error" });
+      if (mountedRef.current) setIsRefreshing(false);
+    }
+  }, [symbol, enqueueSnackbar]);
 
   if (!stock) return null;
 
@@ -203,7 +243,7 @@ function StockCard({ stock, onRemove }) {
     signal, dip, resistance_levels, support_levels,
     current_price, price_change_pct, price_change,
     sparkline, rsi, moving_averages, news, currency,
-    fifty_two_week_high, fifty_two_week_low, name, symbol, error,
+    fifty_two_week_high, fifty_two_week_low, name, error,
     fundamentals, valuation,
   } = stock;
 
@@ -253,6 +293,23 @@ function StockCard({ stock, onRemove }) {
             {/* Right: signal badge + delete — flex-shrink:0 so it never gets squashed */}
             <Box sx={{ display: "flex", alignItems: "flex-start", gap: 0.5, flexShrink: 0 }}>
               <SignalBadge signal={signal?.signal} confidence={signal?.confidence} size="small" />
+              <Tooltip title="Refresh this stock">
+                {/* span wrapper lets Tooltip work while the button is disabled */}
+                <span>
+                  <IconButton
+                    size="small"
+                    onClick={handleRefresh}
+                    disabled={isRefreshing}
+                    sx={{
+                      color: "primary.main",
+                      border: "1px solid rgba(0,180,216,0.25)",
+                      animation: isRefreshing ? "spin 1s linear infinite" : "none",
+                    }}
+                  >
+                    <RefreshIcon fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
               <Tooltip title="Remove stock">
                 <IconButton
                   size="small"
