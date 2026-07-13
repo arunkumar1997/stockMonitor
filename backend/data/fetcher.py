@@ -10,6 +10,7 @@ Data sources:
   - Info:            Derived from history DataFrame (no extra request)
   - Fundamentals:    Yahoo Finance /key-statistics/ page tables
 """
+
 import time
 import random
 import threading
@@ -18,12 +19,20 @@ import atexit
 import pandas as pd
 from typing import Optional, Dict
 
+
+class PlaywrightBrowserMissingError(RuntimeError):
+    """Raised when Playwright's Chromium binary is not installed on this machine."""
+
+    pass
+
+
 # ── Singleton browser management ─────────────────────────────────────────────
 
 _browser = None
 _playwright = None
 _pw_context = None
 _lock = threading.Lock()
+_browser_missing_logged = False  # log the "install chromium" hint only once
 
 
 def _get_browser():
@@ -32,10 +41,37 @@ def _get_browser():
     with _lock:
         if _browser is None or not _browser.is_connected():
             from playwright.sync_api import sync_playwright
+
             _pw_context = sync_playwright().start()
-            _browser = _pw_context.chromium.launch(headless=True)
+            try:
+                _browser = _pw_context.chromium.launch(headless=True)
+            except Exception as e:
+                msg = str(e)
+                if (
+                    "Executable doesn't exist" in msg
+                    or "playwright install" in msg.lower()
+                ):
+                    # Clean up the partially-started context so the next call retries cleanly
+                    try:
+                        _pw_context.stop()
+                    except Exception:
+                        pass
+                    _pw_context = None
+                    raise PlaywrightBrowserMissingError(
+                        "Playwright Chromium is not installed. "
+                        "Run: python -m playwright install chromium"
+                    ) from e
+                raise
             print("[fetcher] Playwright browser launched")
         return _browser
+
+
+def _log_browser_missing_once(err: "PlaywrightBrowserMissingError") -> None:
+    """Emit the actionable install hint at most once per process."""
+    global _browser_missing_logged
+    if not _browser_missing_logged:
+        print(f"[fetcher] {err}")
+        _browser_missing_logged = True
 
 
 def _shutdown_browser():
@@ -73,6 +109,7 @@ def _polite_delay():
 
 
 # ── History fetching ─────────────────────────────────────────────────────────
+
 
 def get_history(symbol: str, period: str = "6mo") -> Optional[pd.DataFrame]:
     """
@@ -112,10 +149,16 @@ def get_history(symbol: str, period: str = "6mo") -> Optional[pd.DataFrame]:
                 c = float(cells[4].inner_text().strip().replace(",", ""))
                 vol_str = cells[6].inner_text().strip().replace(",", "")
                 v = int(vol_str) if vol_str and vol_str != "-" else 0
-                rows_data.append({
-                    "Date": pd.to_datetime(date_str),
-                    "Open": o, "High": h, "Low": l, "Close": c, "Volume": v,
-                })
+                rows_data.append(
+                    {
+                        "Date": pd.to_datetime(date_str),
+                        "Open": o,
+                        "High": h,
+                        "Low": l,
+                        "Close": c,
+                        "Volume": v,
+                    }
+                )
             except (ValueError, IndexError):
                 continue
 
@@ -133,6 +176,9 @@ def get_history(symbol: str, period: str = "6mo") -> Optional[pd.DataFrame]:
         print(f"[fetcher] History OK for {symbol}: {len(df)} rows")
         return df
 
+    except PlaywrightBrowserMissingError as e:
+        _log_browser_missing_once(e)
+        return None
     except Exception as e:
         print(f"[fetcher] History error for {symbol}: {e}")
         return None
@@ -147,13 +193,18 @@ def get_history(symbol: str, period: str = "6mo") -> Optional[pd.DataFrame]:
 def _period_to_days(period: str) -> int:
     """Convert period string to approximate trading days."""
     mapping = {
-        "1mo": 22, "3mo": 65, "6mo": 130,
-        "1y": 252, "2y": 504, "5y": 1260,
+        "1mo": 22,
+        "3mo": 65,
+        "6mo": 130,
+        "1y": 252,
+        "2y": 504,
+        "5y": 1260,
     }
     return mapping.get(period, 130)
 
 
 # ── Info (derived from history) ──────────────────────────────────────────────
+
 
 def get_info(symbol: str, df: Optional[pd.DataFrame] = None) -> Dict:
     """
@@ -162,12 +213,12 @@ def get_info(symbol: str, df: Optional[pd.DataFrame] = None) -> Dict:
     """
     if df is not None and len(df) >= 2:
         current = float(df["Close"].iloc[-1])
-        prev    = float(df["Close"].iloc[-2])
-        high52  = float(df["High"].max())
-        low52   = float(df["Low"].min())
+        prev = float(df["Close"].iloc[-2])
+        high52 = float(df["High"].max())
+        low52 = float(df["Low"].min())
         return {
             "symbol": symbol,
-            "longName": symbol,      # overridden by watchlist name in scheduler
+            "longName": symbol,  # overridden by watchlist name in scheduler
             "currentPrice": current,
             "previousClose": prev,
             "currency": "INR",
@@ -200,18 +251,41 @@ def get_info(symbol: str, df: Optional[pd.DataFrame] = None) -> Dict:
                 break
 
         return {
-            "symbol": symbol, "longName": symbol,
-            "currentPrice": current, "previousClose": prev,
-            "currency": "INR", "fiftyTwoWeekHigh": 0,
-            "fiftyTwoWeekLow": 0, "marketCap": 0, "sector": "",
+            "symbol": symbol,
+            "longName": symbol,
+            "currentPrice": current,
+            "previousClose": prev,
+            "currency": "INR",
+            "fiftyTwoWeekHigh": 0,
+            "fiftyTwoWeekLow": 0,
+            "marketCap": 0,
+            "sector": "",
+        }
+    except PlaywrightBrowserMissingError as e:
+        _log_browser_missing_once(e)
+        return {
+            "symbol": symbol,
+            "longName": symbol,
+            "currentPrice": 0,
+            "previousClose": 0,
+            "currency": "INR",
+            "fiftyTwoWeekHigh": 0,
+            "fiftyTwoWeekLow": 0,
+            "marketCap": 0,
+            "sector": "",
         }
     except Exception as e:
         print(f"[fetcher] Quote scrape error for {symbol}: {e}")
         return {
-            "symbol": symbol, "longName": symbol,
-            "currentPrice": 0, "previousClose": 0,
-            "currency": "INR", "fiftyTwoWeekHigh": 0,
-            "fiftyTwoWeekLow": 0, "marketCap": 0, "sector": "",
+            "symbol": symbol,
+            "longName": symbol,
+            "currentPrice": 0,
+            "previousClose": 0,
+            "currency": "INR",
+            "fiftyTwoWeekHigh": 0,
+            "fiftyTwoWeekLow": 0,
+            "marketCap": 0,
+            "sector": "",
         }
     finally:
         if page:
@@ -223,13 +297,14 @@ def get_info(symbol: str, df: Optional[pd.DataFrame] = None) -> Dict:
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+
 def _safe_float(val) -> Optional[float]:
     """Convert a value to float, returning None on failure."""
     try:
         if val is None:
             return None
         f = float(val)
-        return round(f, 4) if f == f else None   # NaN check
+        return round(f, 4) if f == f else None  # NaN check
     except (TypeError, ValueError):
         return None
 
@@ -266,36 +341,44 @@ def _parse_stat_value(text: str) -> Optional[float]:
 # ── Fundamentals fetching ────────────────────────────────────────────────────
 
 _FUNDAMENTAL_EMPTY = {
-    "trailing_pe": None, "forward_pe": None, "peg_ratio": None,
-    "price_to_book": None, "ev_to_ebitda": None,
-    "trailing_eps": None, "forward_eps": None,
-    "free_cashflow": None, "operating_cashflow": None,
+    "trailing_pe": None,
+    "forward_pe": None,
+    "peg_ratio": None,
+    "price_to_book": None,
+    "ev_to_ebitda": None,
+    "trailing_eps": None,
+    "forward_eps": None,
+    "free_cashflow": None,
+    "operating_cashflow": None,
     "debt_to_equity": None,
-    "profit_margin": None, "revenue_growth": None, "earnings_growth": None,
-    "dividend_yield": None, "return_on_equity": None,
+    "profit_margin": None,
+    "revenue_growth": None,
+    "earnings_growth": None,
+    "dividend_yield": None,
+    "return_on_equity": None,
     "market_cap": None,
 }
 
 # Map of display label → our key name
 _STAT_LABEL_MAP = {
-    "trailing p/e":                "trailing_pe",
-    "forward p/e":                 "forward_pe",
-    "peg ratio (5yr expected)":    "peg_ratio",
-    "price/book (mrq)":            "price_to_book",
-    "enterprise value/ebitda":     "ev_to_ebitda",
-    "diluted eps (ttm)":           "trailing_eps",
+    "trailing p/e": "trailing_pe",
+    "forward p/e": "forward_pe",
+    "peg ratio (5yr expected)": "peg_ratio",
+    "price/book (mrq)": "price_to_book",
+    "enterprise value/ebitda": "ev_to_ebitda",
+    "diluted eps (ttm)": "trailing_eps",
     "forward annual dividend yield": "dividend_yield",
     "trailing annual dividend yield": "dividend_yield",
-    "profit margin":               "profit_margin",
-    "return on equity (ttm)":      "return_on_equity",
-    "revenue per share (ttm)":     None,  # skip
+    "profit margin": "profit_margin",
+    "return on equity (ttm)": "return_on_equity",
+    "revenue per share (ttm)": None,  # skip
     "quarterly revenue growth (yoy)": "revenue_growth",
     "quarterly earnings growth (yoy)": "earnings_growth",
-    "total debt/equity (mrq)":     "debt_to_equity",
-    "market cap":                  "market_cap",
-    "enterprise value":            None,  # skip (we use ev/ebitda)
+    "total debt/equity (mrq)": "debt_to_equity",
+    "market cap": "market_cap",
+    "enterprise value": None,  # skip (we use ev/ebitda)
     "levered free cash flow (ttm)": "free_cashflow",
-    "operating cash flow (ttm)":   "operating_cashflow",
+    "operating cash flow (ttm)": "operating_cashflow",
 }
 
 
@@ -342,6 +425,9 @@ def get_fundamentals(symbol: str) -> Dict:
         print(f"[fetcher] Fundamentals OK for {symbol} (PE={pe})")
         return result
 
+    except PlaywrightBrowserMissingError as e:
+        _log_browser_missing_once(e)
+        return dict(_FUNDAMENTAL_EMPTY)
     except Exception as e:
         print(f"[fetcher] Fundamentals error for {symbol}: {e}")
         return dict(_FUNDAMENTAL_EMPTY)
