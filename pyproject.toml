@@ -1,0 +1,24 @@
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+extend-exclude = [
+    "backend/venv",
+    "**/__pycache__",
+    "**/build",
+    "**/dist",
+    "docs/qa/screenshots",
+]
+
+[tool.ruff.format]
+# Black-compatible defaults. Committing these explicitly so VS Code's
+# Ruff plugin (which walks up the dir tree looking for pyproject.toml)
+# and the pre-commit hook produce identical output.
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+skip-magic-trailing-comma = false
+
+[tool.ruff.lint]
+# Format-only for now. Enable lint rules incrementally in a follow-up
+# once the codebase is format-clean; see docs/issues/ for tickets.
+select = []
