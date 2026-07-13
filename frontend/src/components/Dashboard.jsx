@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from "react";
+import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import Grid from "@mui/material/Grid";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
@@ -66,6 +66,16 @@ function CardSkeleton() {
 }
 
 function SectorSection({ sector, sectorStocks, onRemove, collapsed, onToggleCollapse }) {
+  const signalCounts = useMemo(
+    () =>
+      sectorStocks.reduce((a, s) => {
+        const sig = s.signal?.signal || "WAIT";
+        a[sig] = (a[sig] || 0) + 1;
+        return a;
+      }, {}),
+    [sectorStocks]
+  );
+
   return (
     <Box sx={{ mb: 5 }}>
       {/* Sector header */}
@@ -80,13 +90,7 @@ function SectorSection({ sector, sectorStocks, onRemove, collapsed, onToggleColl
           background: "rgba(0,180,216,0.1)", color: "primary.main",
           border: "1px solid rgba(0,180,216,0.2)", fontWeight: 600, fontSize: "0.7rem",
         }} />
-        {Object.entries(
-          sectorStocks.reduce((a, s) => {
-            const sig = s.signal?.signal || "WAIT";
-            a[sig] = (a[sig] || 0) + 1;
-            return a;
-          }, {})
-        ).map(([sig, cnt]) => (
+        {Object.entries(signalCounts).map(([sig, cnt]) => (
           <Chip key={sig} label={`${sig} ×${cnt}`} size="small" sx={{
             color: SIGNAL_COLORS[sig] || "#90a4ae",
             border: `1px solid ${SIGNAL_COLORS[sig] || "#90a4ae"}30`,
@@ -188,19 +192,29 @@ export default function Dashboard() {
 
   // Search filtering
   const q = searchQuery.trim().toLowerCase();
-  const filteredStocks = q
-    ? stocks.filter((s) =>
-        s.symbol.toLowerCase().includes(q) || (s.name || "").toLowerCase().includes(q)
-      )
-    : stocks;
+  const filteredStocks = useMemo(
+    () =>
+      q
+        ? stocks.filter(
+            (s) =>
+              s.symbol.toLowerCase().includes(q) ||
+              (s.name || "").toLowerCase().includes(q)
+          )
+        : stocks,
+    [stocks, q]
+  );
 
   // Group by sector
-  const grouped = filteredStocks.reduce((acc, stock) => {
-    const sector = stock.sector || "Other";
-    if (!acc[sector]) acc[sector] = [];
-    acc[sector].push(stock);
-    return acc;
-  }, {});
+  const grouped = useMemo(
+    () =>
+      filteredStocks.reduce((acc, stock) => {
+        const sector = stock.sector || "Other";
+        if (!acc[sector]) acc[sector] = [];
+        acc[sector].push(stock);
+        return acc;
+      }, {}),
+    [filteredStocks]
+  );
 
   const signalCounts = stocks.reduce((acc, s) => {
     const sig = s.signal?.signal || "WAIT";
