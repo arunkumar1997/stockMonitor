@@ -76,10 +76,15 @@ function SectorSection({ sector, sectorStocks, onRemove, collapsed, onToggleColl
     [sectorStocks]
   );
 
+  const handleToggle = useCallback(
+    () => onToggleCollapse(sector),
+    [onToggleCollapse, sector]
+  );
+
   return (
     <Box sx={{ mb: 5 }}>
       {/* Sector header */}
-      <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 2, cursor: "pointer" }} onClick={onToggleCollapse}>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 2, cursor: "pointer" }} onClick={handleToggle}>
         <IconButton size="small" sx={{ color: "text.secondary", p: 0.25 }}>
           {collapsed ? <ExpandMoreIcon fontSize="small" /> : <ExpandLessIcon fontSize="small" />}
         </IconButton>
@@ -112,6 +117,8 @@ function SectorSection({ sector, sectorStocks, onRemove, collapsed, onToggleColl
     </Box>
   );
 }
+
+const MemoSectorSection = React.memo(SectorSection);
 
 export default function Dashboard() {
   const [stocks, setStocks] = useState([]);
@@ -176,19 +183,22 @@ export default function Dashboard() {
     enqueueSnackbar(`${symbol} added to watchlist`, { variant: "success" });
   };
 
-  const handleRemove = async (symbol) => {
-    await removeStock(symbol);
-    setStocks((prev) => prev.filter((s) => s.symbol !== symbol));
-    enqueueSnackbar(`${symbol} moved to Trash`, { variant: "info" });
-  };
+  const handleRemove = useCallback(
+    async (symbol) => {
+      await removeStock(symbol);
+      setStocks((prev) => prev.filter((s) => s.symbol !== symbol));
+      enqueueSnackbar(`${symbol} moved to Trash`, { variant: "info" });
+    },
+    [enqueueSnackbar]
+  );
 
-  const toggleSectorCollapse = (sector) => {
+  const toggleSectorCollapse = useCallback((sector) => {
     setCollapsedSectors((prev) => {
       const next = { ...prev, [sector]: !prev[sector] };
       localStorage.setItem("collapsedSectors", JSON.stringify(next));
       return next;
     });
-  };
+  }, []);
 
   // Search filtering
   const q = searchQuery.trim().toLowerCase();
@@ -332,13 +342,13 @@ export default function Dashboard() {
           </Grid>
         ) : (
           Object.entries(grouped).map(([sector, sectorStocks]) => (
-            <SectorSection
+            <MemoSectorSection
               key={sector}
               sector={sector}
               sectorStocks={sectorStocks}
               onRemove={handleRemove}
               collapsed={!!collapsedSectors[sector]}
-              onToggleCollapse={() => toggleSectorCollapse(sector)}
+              onToggleCollapse={toggleSectorCollapse}
             />
           ))
         )}

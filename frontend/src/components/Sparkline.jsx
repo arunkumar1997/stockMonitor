@@ -7,7 +7,7 @@ import {
   YAxis,
 } from "recharts";
 
-export default function Sparkline({ data = [], positive = true, currency = "USD" }) {
+function Sparkline({ data = [], positive = true, currency = "USD" }) {
   if (!data || data.length === 0) return null;
 
   const chartData = data.map((v, i) => ({ i, v }));
@@ -53,3 +53,6 @@ export default function Sparkline({ data = [], positive = true, currency = "USD"
     </ResponsiveContainer>
   );
 }
+
+export default React.memo(Sparkline);
+
