@@ -4,6 +4,7 @@ Data is served from SQLite (stock_data.db).
 Watchlist is now fully DB-driven — stocks.json is no longer used.
 A background APScheduler refreshes stocks one-by-one every 15 minutes.
 """
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -11,6 +12,7 @@ import threading
 
 import scheduler
 from data import store
+from data import fetcher
 
 app = FastAPI(title="DipSense API", version="3.0.0")
 
@@ -25,9 +27,45 @@ app.add_middleware(
 
 # ── Lifecycle ─────────────────────────────────────────────────────────────────
 
+# Set once at startup by startup_event() — surfaced via /health so ops can see
+# whether the Playwright Chromium binary is installed on this machine.
+_playwright_ok: bool = False
+
+
+def _playwright_launch_check():
+    """
+    Verify Playwright can actually launch a browser. Runs in a background
+    thread because fetcher uses the sync Playwright API, which refuses to
+    run inside an asyncio event loop (FastAPI's startup runs in one).
+    Result is surfaced via /health.
+    """
+    global _playwright_ok
+    try:
+        fetcher._get_browser()
+        _playwright_ok = True
+    except fetcher.PlaywrightBrowserMissingError as e:
+        _playwright_ok = False
+        print(
+            "⚠️  PLAYWRIGHT BROWSER MISSING — run: python -m playwright install chromium"
+        )
+        print(f"    ({e})")
+    except Exception as e:
+        # Any other launch failure — don't crash startup, just mark unhealthy.
+        _playwright_ok = False
+        print(f"⚠️  Playwright launch check failed: {type(e).__name__}: {e}")
+
+
 @app.on_event("startup")
 async def startup_event():
     store.init_db()
+
+    # Kick off the Playwright launch check in a background thread so it doesn't
+    # collide with FastAPI's asyncio event loop. The /health endpoint stays
+    # cheap by reading the cached _playwright_ok flag.
+    threading.Thread(
+        target=_playwright_launch_check, name="playwright-check", daemon=True
+    ).start()
+
     scheduler.start(run_now=False)  # no auto-refresh on start — use manual refresh
 
 
@@ -38,6 +76,7 @@ async def shutdown_event():
 
 # ── Models ────────────────────────────────────────────────────────────────────
 
+
 class StockAdd(BaseModel):
     symbol: str
     name: str
@@ -45,6 +84,7 @@ class StockAdd(BaseModel):
 
 
 # ── Watchlist Routes ──────────────────────────────────────────────────────────
+
 
 @app.get("/api/stocks")
 def list_stocks():
@@ -82,7 +122,9 @@ def remove_stock(symbol: str):
     sym = symbol.upper()
     active = [s for s in store.watchlist_get_all() if s["symbol"] == sym]
     if not active:
-        raise HTTPException(status_code=404, detail=f"{sym} not found in active watchlist")
+        raise HTTPException(
+            status_code=404, detail=f"{sym} not found in active watchlist"
+        )
 
     store.watchlist_soft_delete(sym)
     return {"message": f"{sym} moved to trash", "stocks": store.watchlist_get_all()}
@@ -129,6 +171,7 @@ def purge_stock(symbol: str):
 
 # ── Dashboard & Analysis ──────────────────────────────────────────────────────
 
+
 @app.get("/api/dashboard")
 def dashboard():
     """
@@ -145,23 +188,38 @@ def dashboard():
         if sym in cached:
             result.append(cached[sym])
         else:
-            result.append({
-                "symbol": sym,
-                "name": s.get("name", sym),
-                "sector": s.get("sector", "Other"),
-                "current_price": 0,
-                "price_change_pct": 0,
-                "price_change": 0,
-                "sparkline": [],
-                "dip": {"is_dip": False, "dip_pct": 0, "severity": "none", "recent_high": 0},
-                "resistance_levels": [],
-                "support_levels": [],
-                "rsi": None,
-                "moving_averages": {},
-                "signal": {"signal": "WAIT", "confidence": 0, "reasons": ["Data loading…"]},
-                "news": {"headlines": [], "negative_score": 0, "sentiment": "Neutral"},
-                "_updated_at": None,
-            })
+            result.append(
+                {
+                    "symbol": sym,
+                    "name": s.get("name", sym),
+                    "sector": s.get("sector", "Other"),
+                    "current_price": 0,
+                    "price_change_pct": 0,
+                    "price_change": 0,
+                    "sparkline": [],
+                    "dip": {
+                        "is_dip": False,
+                        "dip_pct": 0,
+                        "severity": "none",
+                        "recent_high": 0,
+                    },
+                    "resistance_levels": [],
+                    "support_levels": [],
+                    "rsi": None,
+                    "moving_averages": {},
+                    "signal": {
+                        "signal": "WAIT",
+                        "confidence": 0,
+                        "reasons": ["Data loading…"],
+                    },
+                    "news": {
+                        "headlines": [],
+                        "negative_score": 0,
+                        "sentiment": "Neutral",
+                    },
+                    "_updated_at": None,
+                }
+            )
     return result
 
 
@@ -175,12 +233,13 @@ def analyze_stock(symbol: str):
     if result is None:
         raise HTTPException(
             status_code=202,
-            detail=f"{symbol.upper()} not yet cached — refresh in progress"
+            detail=f"{symbol.upper()} not yet cached — refresh in progress",
         )
     return result
 
 
 # ── Scheduler ─────────────────────────────────────────────────────────────────
+
 
 @app.get("/api/scheduler/status")
 def scheduler_status():
@@ -208,7 +267,11 @@ def force_refresh(symbol: str):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "scheduler": scheduler.status()["running"]}
+    return {
+        "status": "ok",
+        "scheduler": scheduler.status()["running"],
+        "playwright_ok": _playwright_ok,
+    }
 
 
 @app.get("/api/logs")
@@ -218,6 +281,7 @@ def get_logs(limit: int = 200):
 
 
 # ── Config / Settings ──────────────────────────────────────────────────────────
+
 
 class ConfigUpdate(BaseModel):
     value: object  # str | int | float | list
