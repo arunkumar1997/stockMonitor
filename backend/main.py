@@ -105,13 +105,9 @@ def add_stock(stock: StockAdd):
 
     store.watchlist_add(symbol, name, sector)
 
-    # Immediately kick off a background refresh for the new stock
-    threading.Thread(
-        target=scheduler.refresh_one,
-        args=(symbol, name, sector),
-        kwargs={"skip_if_fresh": False},
-        daemon=True,
-    ).start()
+    # Enqueue a refresh for the new stock. refresh_one is non-blocking —
+    # it just drops a job on the worker queue (see #005).
+    scheduler.refresh_one(symbol, name, sector, skip_if_fresh=False)
 
     return {"message": f"{symbol} added", "stocks": store.watchlist_get_all()}
 
@@ -146,14 +142,11 @@ def restore_stock(symbol: str):
 
     store.watchlist_restore(sym)
 
-    # Re-queue a refresh so data is fresh on restore
+    # Re-queue a refresh so data is fresh on restore (non-blocking, see #005).
     meta = deleted[0]
-    threading.Thread(
-        target=scheduler.refresh_one,
-        args=(sym, meta.get("name", sym), meta.get("sector", "Other")),
-        kwargs={"skip_if_fresh": False},
-        daemon=True,
-    ).start()
+    scheduler.refresh_one(
+        sym, meta.get("name", sym), meta.get("sector", "Other"), skip_if_fresh=False
+    )
 
     return {"message": f"{sym} restored", "stocks": store.watchlist_get_all()}
 
@@ -256,12 +249,11 @@ def force_refresh(symbol: str):
         raise HTTPException(status_code=404, detail=f"{sym} not in active watchlist")
 
     meta = active[sym]
-    threading.Thread(
-        target=scheduler.refresh_one,
-        args=(sym, meta.get("name", sym), meta.get("sector", "Other")),
-        kwargs={"skip_if_fresh": False},
-        daemon=True,
-    ).start()
+    # Fire-and-forget: refresh_one drops a job on the worker queue and
+    # returns immediately (see #005).
+    scheduler.refresh_one(
+        sym, meta.get("name", sym), meta.get("sector", "Other"), skip_if_fresh=False
+    )
     return {"message": f"Refresh triggered for {sym}"}
 
 
